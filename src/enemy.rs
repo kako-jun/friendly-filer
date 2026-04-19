@@ -44,14 +44,16 @@ impl Enemy {
     /// - `kind` is picked from the extension (see [`EnemyKind`]).
     /// - `hp` is `ceil(log2(size_kb))`, clamped to `[1, 5]`. Empty files and
     ///   files under 1 KB all get 1 HP.
-    pub fn from_metadata(file_name: String, size: u64, pos: (f64, f64)) -> Self {
+    /// - `x` / `y` are scene-space coordinates (not screen). `z` (vertical
+    ///   hover offset for [`EnemyKind::Floaty`]) will be added in #18.
+    pub fn from_metadata(file_name: String, size: u64, x: f64, y: f64) -> Self {
         let kind = classify(&file_name);
         let hp = hp_from_size(size);
         Self {
             file_name,
             size,
-            x: pos.0,
-            y: pos.1,
+            x,
+            y,
             z: 0.0,
             hp,
             kind,
@@ -73,6 +75,12 @@ fn classify(file_name: &str) -> EnemyKind {
     }
 }
 
+/// HP mapping from file byte size.
+///
+/// Empty files, files under 1 KB, and files that are **exactly 1 KB
+/// (1024 bytes)** all resolve to 1 HP — the `kb <= 1.0` cutoff is
+/// inclusive. From just above 1 KB, HP scales as `ceil(log2(size_kb))`,
+/// capped at 5 so that no file takes more than five disc hits to down.
 fn hp_from_size(size: u64) -> u32 {
     if size == 0 {
         return 1;
@@ -126,7 +134,7 @@ mod tests {
 
     #[test]
     fn from_metadata_populates_fields() {
-        let e = Enemy::from_metadata("game.rs".into(), 4096, (2.0, 3.0));
+        let e = Enemy::from_metadata("game.rs".into(), 4096, 2.0, 3.0);
         assert_eq!(e.file_name, "game.rs");
         assert_eq!(e.size, 4096);
         assert_eq!(e.kind, EnemyKind::Nimble);

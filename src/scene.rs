@@ -25,7 +25,7 @@ impl DirScene {
     /// and the monolith sits behind the player. Swap this out for real
     /// `read_dir` work in Issue #3.
     pub fn placeholder() -> Self {
-        let enemy = Enemy::from_metadata("demo.rs".to_string(), 2 * 1024, (0.0, 4.0));
+        let enemy = Enemy::from_metadata("demo.rs".to_string(), 2 * 1024, 0.0, 4.0);
         Self {
             player_spawn: (0.0, 0.0),
             enemies: vec![enemy],

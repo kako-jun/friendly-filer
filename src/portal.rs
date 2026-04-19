@@ -107,9 +107,14 @@ mod tests {
             assert!(is_dangerous_path(Path::new("/")));
         }
 
+        // Save originals so we can restore them and leave the env exactly
+        // as we found it, no matter which branch we took.
+        let original_home = std::env::var_os("HOME");
+        let original_userprofile = std::env::var_os("USERPROFILE");
+
         let fake_home = "/tmp/friendly-filer-home-test";
-        // SAFETY: only this test touches `HOME` during the run; see the
-        // comment above on why we can't split this up.
+        // SAFETY: only this test touches `HOME` / `USERPROFILE` during the
+        // run; see the comment above on why we can't split this up.
         unsafe {
             std::env::set_var("HOME", fake_home);
         }
@@ -123,8 +128,26 @@ mod tests {
             "{fake_home}/projects/freeza"
         ))));
 
+        // With both `HOME` and `USERPROFILE` unset, a deep path under a
+        // typical project tree must still be considered safe: we're
+        // validating that `home_dir()` returning `None` doesn't accidentally
+        // flag arbitrary paths as dangerous.
         unsafe {
             std::env::remove_var("HOME");
+            std::env::remove_var("USERPROFILE");
+        }
+        assert!(!is_dangerous_path(Path::new("/Users/foo/projects/bar")));
+
+        // Restore whatever was there before, preserving absence vs. empty.
+        unsafe {
+            match original_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+            match original_userprofile {
+                Some(v) => std::env::set_var("USERPROFILE", v),
+                None => std::env::remove_var("USERPROFILE"),
+            }
         }
     }
 }

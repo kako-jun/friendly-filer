@@ -60,8 +60,8 @@ feeding it the scene data produced by `DirScene`.
 | `enemy.rs` | skeleton (#8) | `EnemyKind`, `Enemy`, `Enemy::from_metadata` (extension-based classification, `log(size)` HP), `Swarm` for LOD aggregation. AI lands in #9. |
 | `disc.rs` | skeleton (#8) | `DiscState { Idle, Flying, Returning }`, `Disc`, `is_ready`. Physics + multi-hit land in #10. |
 | `portal.rs` | skeleton (#8) | `Portal` (subfolder), `Monolith` (current folder ops), `ParentGate` (`..`), `is_dangerous_path` guard. Sealed-door logic lands in #11. |
-| `menu.rs` | skeleton (#8) | `Operation { Open, Rename, Move, Copy, Delete, Info, Cancel }` and `MenuContext { Single, Bulk, Folder }`. Real menu + effects land in #12. |
-| `hud.rs` | skeleton (#8) | `Hud { hp, score, .. }`, `Mode { Fps, Calm, Search, Input }`. Full HUD lands in #13. |
+| `menu.rs` | skeleton (#8) | `Operation { Open, Rename, Move, Copy, Delete, Info, Cancel }` and `MenuContext { File, Swarm, Folder, Monolith }`. Real menu + effects land in #12. |
+| `hud.rs` | skeleton (#8) | `Hud { hp, score, .. }`, `Mode { Fps, FpsOff, Frozen, Crashed }`. Full HUD lands in #13. |
 | `config.rs` | skeleton (#8) | `Config` with `Default`, `AimStyle { Keyboard, Mouse }`. Real TOML loader lands in #17. |
 | `scene.rs` | skeleton (#8) | `DirScene` placeholder returning a single dummy enemy. Real directory → scene conversion lands in #3 (absorbed into the FPS layer). |
 | `main.rs` | demo (#8) | Renders one TRON-palette frame (black bg, blue grid, red enemy placeholder, blue banner) for ~0.8 s and exits. |

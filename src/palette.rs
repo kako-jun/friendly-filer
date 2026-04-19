@@ -48,4 +48,9 @@ pub const LOCK_RED: Color = ENEMY_RED;
 
 /// Secondary UI grey — same as [`GEOMETRY_GRAY`], aliased for readability in
 /// HUD rendering code.
+///
+/// Primary use sites: HUD sub-text (#13, crash counter / breadcrumb body
+/// text) and the monolith / portal panel faces. Like the other semantic
+/// aliases, this is one of the constants the future `Config` loader (#17)
+/// will let users override from TOML.
 pub const UI_GRAY: Color = GEOMETRY_GRAY;

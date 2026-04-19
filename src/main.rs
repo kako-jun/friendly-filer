@@ -14,13 +14,19 @@ use crossterm::style::{
     Color as CtColor, Print, ResetColor, SetBackgroundColor, SetForegroundColor,
 };
 use crossterm::terminal::{
-    Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
-    enable_raw_mode, size,
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode, size,
 };
 use termray::Framebuffer;
 use termray::label::{Font8x8, GlyphRenderer};
 
+use friendly_filer::enemy::Enemy;
 use friendly_filer::palette::{BG_BLACK, ENEMY_RED, GEOMETRY_GRAY, GRID_BLUE, UI_BLUE};
+use friendly_filer::scene::DirScene;
+
+/// Number of vertical grid lines converging on the vanishing point. Odd, so
+/// that one line sits dead centre. Raising this value packs the near rows
+/// tighter (the fan spreads the same width across more stems).
+const GRID_LINE_COUNT: i32 = 13;
 
 /// RAII guard that enters the alternate screen in raw mode on construction
 /// and restores the terminal on drop. Ensures the terminal is cleaned up
@@ -30,8 +36,12 @@ struct TerminalGuard;
 impl TerminalGuard {
     fn new() -> anyhow::Result<Self> {
         enable_raw_mode()?;
-        execute!(stdout(), EnterAlternateScreen, Hide, Clear(ClearType::All))?;
-        Ok(Self)
+        // Construct `Self` immediately so that if the subsequent `execute!`
+        // fails, `Drop` still runs and disables raw mode. Otherwise a mid-
+        // construction failure would leak raw mode into the user's shell.
+        let guard = Self;
+        execute!(stdout(), EnterAlternateScreen, Hide)?;
+        Ok(guard)
     }
 }
 
@@ -55,8 +65,9 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    let scene = DirScene::placeholder();
     let mut fb = Framebuffer::new(fb_w, fb_h);
-    draw_tron_demo(&mut fb);
+    draw_tron_demo(&mut fb, &scene);
 
     let _guard = TerminalGuard::new()?;
 
@@ -71,7 +82,7 @@ fn main() -> anyhow::Result<()> {
 
 /// Paint the TRON skeleton frame directly into the framebuffer. Order:
 /// clear → floor grid → horizon bar → enemy placeholder → HUD banner.
-fn draw_tron_demo(fb: &mut Framebuffer) {
+fn draw_tron_demo(fb: &mut Framebuffer, scene: &DirScene) {
     fb.clear(BG_BLACK);
 
     let w = fb.width();
@@ -100,12 +111,22 @@ fn draw_tron_demo(fb: &mut Framebuffer) {
 
     // ---------- Enemy placeholder ----------
     //
-    // Centred red rectangle. Stand-in for the wireframe hostile that the
-    // real enemy module will render via termray sprites in #9.
-    draw_enemy_placeholder(fb, horizon);
+    // Centred red rectangle driven by the first enemy in `scene`. Real
+    // per-enemy projection arrives with #9; here we just consume the
+    // scene's demo `Enemy` to prove the `DirScene → renderer` wire works.
+    if let Some(enemy) = scene.enemies.first() {
+        draw_enemy_placeholder(fb, horizon, enemy);
+    }
 
     // ---------- HUD banner ----------
-    let banner = "FRIENDLY-FILER v0.2.0-dev - TRON MODE - #8";
+    //
+    // Keep the version in sync with `Cargo.toml` by reading it from cargo at
+    // build time; `-dev` tracks the pre-release state of the #8 branch.
+    let banner = concat!(
+        "FRIENDLY-FILER v",
+        env!("CARGO_PKG_VERSION"),
+        "-dev - TRON MODE - #8"
+    );
     draw_banner(fb, banner);
 }
 
@@ -122,29 +143,36 @@ fn draw_floor_grid(fb: &mut Framebuffer, horizon: usize) {
 
     let floor_depth = h - horizon - 1;
 
-    // Horizontal grid lines: the `row_below_horizon` value shrinks as we
-    // approach the horizon, so we step with a widening stride to get
-    // perspective-like compression.
-    let mut stride = 2usize;
-    let mut y = h - 1;
-    while y > horizon {
+    // Horizontal grid lines: start at the near edge with a 2-pixel stride
+    // and widen it toward the horizon for perspective-like compression.
+    // Collect the rows first so the loop is a plain iterator instead of a
+    // manual underflow-guarded `while`.
+    let horizontal_rows = {
+        let mut rows = Vec::new();
+        let mut stride = 2usize;
+        let mut y = h - 1;
+        loop {
+            rows.push(y);
+            let next_y = match y.checked_sub(stride) {
+                Some(v) if v > horizon => v,
+                _ => break,
+            };
+            y = next_y;
+            stride = stride.saturating_add(1).min(floor_depth.max(1));
+        }
+        rows
+    };
+    for y in horizontal_rows {
         for x in 0..w {
             fb.set_pixel(x, y, GRID_BLUE);
         }
-        if y < stride + horizon + 1 {
-            break;
-        }
-        y -= stride;
-        // Increase stride so farther lines are sparser.
-        stride = stride.saturating_add(1).min(floor_depth.max(1));
     }
 
     // Vertical grid lines converge on a vanishing point at (cx, horizon).
     // Sampling each floor row and projecting x positions outward produces
     // the classic TRON perspective fan.
     let cx = w as f64 / 2.0;
-    let line_count = 13i32; // odd -> one line dead centre
-    let half = line_count / 2;
+    let half = GRID_LINE_COUNT / 2;
     for y_row in (horizon + 1)..h {
         let d = (y_row - horizon) as f64; // distance below horizon, in pixels
         // Scale of the near plane relative to depth.
@@ -163,7 +191,12 @@ fn draw_floor_grid(fb: &mut Framebuffer, horizon: usize) {
 /// wireframe will be rendered by the real enemy pass. Filled in
 /// [`GEOMETRY_GRAY`] with an [`ENEMY_RED`] outline so the silhouette reads
 /// against the blue grid.
-fn draw_enemy_placeholder(fb: &mut Framebuffer, horizon: usize) {
+///
+/// The `enemy` argument drives the screen-space placement via a trivial
+/// perspective-stand-in: `enemy.x` shifts the box horizontally around the
+/// screen centre, and `enemy.y` (forward distance in scene units) pushes it
+/// deeper into the floor. Real termray sprite projection arrives in #9.
+fn draw_enemy_placeholder(fb: &mut Framebuffer, horizon: usize, enemy: &Enemy) {
     let w = fb.width();
     let h = fb.height();
 
@@ -172,10 +205,18 @@ fn draw_enemy_placeholder(fb: &mut Framebuffer, horizon: usize) {
     let box_w = (w / 10).max(6);
     let box_h = (h / 5).max(8);
 
-    let cx = w / 2;
-    // Base of box sits a little below the horizon, giving the enemy
-    // "feet on the floor" at middle distance.
-    let base_y = horizon + (h - horizon) / 4;
+    // Project scene -> screen with a deliberately simple model: the
+    // vanishing point sits at (w/2, horizon); increasing `enemy.y` moves the
+    // base toward the horizon (smaller floor depth used), and `enemy.x`
+    // offsets horizontally scaled by that same depth. Good enough to
+    // demonstrate that `DirScene` data reaches the renderer.
+    let floor_depth = (h - horizon).max(1) as f64;
+    let depth_t = (enemy.y / 8.0).clamp(0.0, 0.95);
+    let base_offset = (floor_depth * (1.0 - depth_t) / 4.0).max(1.0) as usize;
+    let base_y = (horizon + base_offset).min(h.saturating_sub(1));
+    let screen_x_offset = enemy.x * (floor_depth * (1.0 - depth_t) / 16.0);
+    let cx = ((w as f64 / 2.0) + screen_x_offset).clamp(0.0, w as f64) as usize;
+
     let top_y = base_y.saturating_sub(box_h);
     let x0 = cx.saturating_sub(box_w / 2);
     let x1 = (x0 + box_w).min(w);
@@ -187,18 +228,15 @@ fn draw_enemy_placeholder(fb: &mut Framebuffer, horizon: usize) {
         }
     }
 
-    // Red outline (top, bottom, sides).
+    // Red outline (top, bottom, sides). `set_pixel` is bounds-checked
+    // internally, so we don't need to guard `base_y - 1` / `x1 - 1` here.
     for x in x0..x1 {
         fb.set_pixel(x, top_y, ENEMY_RED);
-        if base_y > 0 && base_y - 1 < h {
-            fb.set_pixel(x, base_y - 1, ENEMY_RED);
-        }
+        fb.set_pixel(x, base_y.saturating_sub(1), ENEMY_RED);
     }
     for y in top_y..base_y {
         fb.set_pixel(x0, y, ENEMY_RED);
-        if x1 > 0 {
-            fb.set_pixel(x1 - 1, y, ENEMY_RED);
-        }
+        fb.set_pixel(x1.saturating_sub(1), y, ENEMY_RED);
     }
 }
 
