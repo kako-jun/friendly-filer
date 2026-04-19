@@ -18,6 +18,7 @@ pub mod enemy;
 pub mod hud;
 pub mod menu;
 pub mod palette;
+pub mod physics;
 pub mod player;
 pub mod portal;
 pub mod render;
