@@ -1,7 +1,23 @@
-//! friendly-filer — TUI 3D first-person file manager powered by termray.
+//! friendly-filer — a TRON-styled first-person file manager on top of termray.
 //!
-//! Phase 0 skeleton: this crate currently only exposes a placeholder. Later
-//! phases will add the scene builder (`DirScene`), navigation state, file
-//! operations, and atmosphere layers. The binary entry point lives in
-//! `src/main.rs` and deliberately avoids pulling in higher-level APIs until
-//! they exist.
+//! Each file in the current directory is rendered as a hostile wireframe
+//! enemy; each subfolder becomes a portal. The player walks the 3D grid,
+//! throws an identity disc to "identify" a target, and an operation menu
+//! opens on return. Beneath the game layer it is a real, reversible file
+//! manager — `delete` moves to `.trash`, `u` undoes, and `Game Over` does
+//! not exist.
+//!
+//! This crate currently exposes the FPS-layer **skeleton** (Issue #8): the
+//! module shapes and palette are in place, but movement, combat and real
+//! filesystem reads arrive in the `#9–#18` sub-issues. See
+//! `docs/fps-spec.md` for the full design.
+
+pub mod config;
+pub mod disc;
+pub mod enemy;
+pub mod hud;
+pub mod menu;
+pub mod palette;
+pub mod player;
+pub mod portal;
+pub mod scene;

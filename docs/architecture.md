@@ -1,73 +1,121 @@
 # friendly-filer — Architecture
 
-> Phase 0 document. Expect this file to grow as each phase lands.
+> This document describes the **FPS layer** design introduced by
+> [#8](https://github.com/kako-jun/friendly-filer/issues/8). The older
+> three-phase "3D filer" roadmap from #2 is folded into the FPS layer and
+> is no longer pursued as a standalone track. See
+> [`docs/fps-spec.md`](./fps-spec.md) for the canonical design spec.
 
-## Three-layer model
+## Concept
 
-friendly-filer is a thin orchestrator over the external `termray` crate. The runtime splits cleanly into three layers.
+friendly-filer is a **TRON-styled FPS that happens to be a real file
+manager**. The current directory is the arena, files are wireframe
+enemies, subfolders are portals, and the player throws an identity disc
+to "identify" a target — at which point an operation menu opens and the
+usual file operations (open / rename / move / copy / delete / info) are
+available. `delete` moves to `.trash` and is reversible via `u`. Game
+Over does not exist.
+
+FPS semantics can be switched off (`F1`) so the program degrades to a
+quiet 3D file browser for days when that is all that is wanted.
+
+## Layered model
 
 ```
 +-------------------------------------------------------------+
-|  Input loop layer          (src/main.rs, later src/nav.rs)  |
-|  - crossterm event read                                     |
-|  - Wizardry / free navigation state                         |
-|  - dispatch to ops / scene                                  |
+|  Game loop & input         (src/main.rs, later src/app.rs)  |
+|  - frame pacing, crossterm event read                       |
+|  - Player state, Disc state, Menu state                     |
+|  - dispatches file operations once a target is confirmed    |
 +-------------------------------------------------------------+
-|  Filesystem I/O layer      (src/scene.rs, src/ops.rs)       |
+|  Simulation layer          (player, enemy, disc, portal,    |
+|                             hud, menu, scene, config)       |
+|  - Pure Rust data: no rendering, minimal IO                 |
+|  - Unit-testable (10 tests green at the skeleton stage)     |
++-------------------------------------------------------------+
+|  Filesystem I/O layer      (scene::DirScene, future ops.rs) |
 |  - read_dir / metadata / du-style aggregation               |
-|  - sprite / label assembly                                  |
+|  - sprite / label assembly, trash + undo journal            |
 |  - OS-delegated open, rename, delete, copy, move            |
 +-------------------------------------------------------------+
 |  termray render layer      (external crate `termray` 0.3)   |
 |  - DDA wall raycasting                                      |
 |  - floor / ceiling per-column ray intersection              |
-|  - sprite & label projection                                |
+|  - sprite & label projection, 8×8 glyph font                |
 |  - Framebuffer → crossterm half-block presentation          |
 +-------------------------------------------------------------+
 ```
 
-The render layer is a dependency, not part of this crate. friendly-filer only *injects* file-manager semantics into termray through trait impls (`WallTexturer`, `FloorTexturer`, `SpriteArt`, `GlyphRenderer`).
+termray is a dependency, not part of this crate. friendly-filer injects
+file-manager and FPS semantics into termray through trait impls
+(`WallTexturer`, `FloorTexturer`, `SpriteArt`, `GlyphRenderer`) and by
+feeding it the scene data produced by `DirScene`.
 
-## Phase dependency graph
+## Module map (`src/`)
 
-```
-Phase 0 (#2)  skeleton            ─┐
-                                   ├─► Phase 1 (#3) scene build
-Phase 1 (#3)  DirScene ───────────┬┘
-                                  │
-                                  ├─► Phase 2 (#4) navigation ──┐
-                                  │                              │
-                                  └─► Phase 3 (#5) operations ───┤
-                                                                 ▼
-                                                       Phase 4 (#6) polish
-```
+| Module | Status | Responsibility |
+|---|---|---|
+| `palette.rs` | skeleton (#8) | TRON 3-color constants: `BG_BLACK`, `GRID_BLUE`, `ENEMY_RED`, `GEOMETRY_GRAY`, `UI_BLUE`, `WARN_RED`. Single source of truth for all drawing. |
+| `player.rs` | skeleton (#8) | `Player { pos, yaw, hp, .. }`, `new`, `is_crashed`. Movement / jump land in #18. |
+| `enemy.rs` | skeleton (#8) | `EnemyKind`, `Enemy`, `Enemy::from_metadata` (extension-based classification, `log(size)` HP), `Swarm` for LOD aggregation. AI lands in #9. |
+| `disc.rs` | skeleton (#8) | `DiscState { Idle, Flying, Returning }`, `Disc`, `is_ready`. Physics + multi-hit land in #10. |
+| `portal.rs` | skeleton (#8) | `Portal` (subfolder), `Monolith` (current folder ops), `ParentGate` (`..`), `is_dangerous_path` guard. Sealed-door logic lands in #11. |
+| `menu.rs` | skeleton (#8) | `Operation { Open, Rename, Move, Copy, Delete, Info, Cancel }` and `MenuContext { File, Swarm, Folder, Monolith }`. Real menu + effects land in #12. |
+| `hud.rs` | skeleton (#8) | `Hud { hp, score, .. }`, `Mode { Fps, FpsOff, Frozen, Crashed }`. Full HUD lands in #13. |
+| `config.rs` | skeleton (#8) | `Config` with `Default`, `AimStyle { Keyboard, Mouse }`. Real TOML loader lands in #17. |
+| `scene.rs` | skeleton (#8) | `DirScene` placeholder returning a single dummy enemy. Real directory → scene conversion lands in #3 (absorbed into the FPS layer). |
+| `main.rs` | demo (#8) | Renders one TRON-palette frame (black bg, blue grid, red enemy placeholder, blue banner) for ~0.8 s and exits. |
 
-- **Phase 0** lays down the build, CI, release, and render pipeline plumbing. No filesystem reads yet.
-- **Phase 1** introduces `DirScene` — a builder that turns a directory path into a `TileMap`, `HeightMap`, sprite list, and label set that termray can render.
-- **Phase 2** adds the camera state machine (Wizardry 90° steps vs. free smooth movement) and the input event loop.
-- **Phase 3** wires keybindings to file operations (open / delete / rename / copy / move), delegating to the OS where that is the right answer.
-- **Phase 4** is the atmosphere pass: depth-aware color, fog, themes, configuration.
+## Current state (#8 skeleton)
 
-## Current state (Phase 0)
-
-`src/main.rs` currently:
+What `cargo run` does today:
 
 1. Reads terminal size via `crossterm::terminal::size`.
-2. Allocates a `termray::Framebuffer` at full terminal width × 2×(rows−2) pixels (half-block rendering doubles vertical resolution).
-3. Clears it to a dark blue-grey.
-4. Enters the alternate screen, hides the cursor, enables raw mode.
-5. Writes one frame using half-block characters (`▀`): top pixel → foreground RGB, bottom pixel → background RGB.
-6. Sleeps ~800 ms so the user can see the blank frame.
-7. Restores the terminal and exits.
+2. Allocates a `termray::Framebuffer` sized to the terminal (half-block
+   vertical doubling applied).
+3. Paints a single TRON-palette frame:
+   - black background,
+   - converging blue floor grid with a blue horizon line,
+   - a gray-filled, red-outlined rectangle in the middle as an enemy
+     placeholder,
+   - a blue `Font8x8` banner near the bottom.
+4. Enters the alternate screen, hides the cursor, enables raw mode via
+   a RAII `TerminalGuard`.
+5. Sleeps 800 ms so the frame is visible.
+6. Drops the guard, restoring the terminal, and exits cleanly.
 
-There is no scene, no input handling, no filesystem interaction yet — those arrive with the phases above.
+No input loop, no filesystem reads, no real enemies, no disc, no menu —
+those arrive with issues #9–#18. All 10 simulation-layer unit tests are
+green.
+
+## Sub-issue graph (FPS layer)
+
+```
+#8 FPS parent (skeleton + spec)
+ ├─► #9  enemy spawn & AI (needs #3 scene, LOD, watch)
+ ├─► #10 identity disc (needs #9 for targets)
+ ├─► #11 portals + monolith + parent gate + sealed doors
+ ├─► #12 operation menu + bulk + per-op animation + undo + .trash
+ ├─► #13 HUD + crash + respawn + minimap
+ ├─► #14 search mode (/, fuzzy warp, freeze-time)
+ ├─► #15 input mode (rename, new file/folder, freeze-time)
+ ├─► #16 FPS OFF + preview panel + shell integration (--cd-on-exit)
+ ├─► #17 config (TOML, palette, keys, LOD thresholds)
+ └─► #18 player movement (WASD / hjkl, jump, gravity, aim)
+```
+
+The old Phase 1–4 issues (#3 scene build, #4 navigation, #5 operations,
+#6 polish) are **absorbed** into this graph. They remain open for
+context but new work happens on #9–#18.
 
 ## External dependencies
 
 | Crate | Version | Role |
 |---|---|---|
-| [`termray`](https://crates.io/crates/termray) | 0.3 | Raycasting, framebuffer, sprite/label projection |
+| [`termray`](https://crates.io/crates/termray) | 0.3 | Raycasting, framebuffer, sprite & label projection, `Font8x8` |
 | [`crossterm`](https://crates.io/crates/crossterm) | 0.29 | Cross-platform terminal I/O and input events |
 | [`anyhow`](https://crates.io/crates/anyhow) | 1 | Error propagation in the binary |
 
-The dependency list is deliberately minimal. File-system work in later phases will use `std::fs` wherever possible; `open` (or a platform-specific equivalent) will be added when Phase 3 needs OS delegation.
+The dependency list is deliberately minimal. Filesystem work will lean
+on `std::fs`; `open`-style OS delegation and `notify` (external change
+watch) will be added when their issues land.
