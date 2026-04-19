@@ -17,7 +17,7 @@ use crossterm::terminal::{
 use termray::label::{Font8x8, GlyphRenderer};
 use termray::{Framebuffer, render_floor_ceiling, render_walls};
 
-use friendly_filer::input::poll_frame_input;
+use friendly_filer::input::{InputState, poll_frame_input};
 use friendly_filer::palette::{BG_BLACK, UI_BLUE};
 use friendly_filer::physics::{
     AIM_PITCH_RATE, AIM_YAW_RATE, GROUND_Z, MOVE_SPEED, RUN_MULTIPLIER, add_pitch, add_yaw,
@@ -93,11 +93,12 @@ fn main() -> anyhow::Result<()> {
 
     let frame_target = Duration::from_millis(FRAME_MS);
     let mut last_tick = Instant::now();
+    let mut input_state = InputState::new();
 
     loop {
         // Poll with a 0-duration timeout so the loop runs at the target
         // frame rate instead of stalling on slow keyboard input.
-        let input = poll_frame_input(Duration::ZERO)?;
+        let input = poll_frame_input(&mut input_state, Duration::ZERO)?;
         if input.quit {
             break;
         }
