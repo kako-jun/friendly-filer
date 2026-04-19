@@ -20,4 +20,5 @@ pub mod menu;
 pub mod palette;
 pub mod player;
 pub mod portal;
+pub mod render;
 pub mod scene;
