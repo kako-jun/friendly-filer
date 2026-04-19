@@ -30,6 +30,12 @@ use crate::palette::{BG_BLACK, GEOMETRY_GRAY, GRID_BLUE};
 /// so any fractional coordinate closer than this to an integer sits inside
 /// a grid line. Tuned so the line is visible at spawn distance without
 /// pixelating into a solid plane near the camera.
+///
+/// Aliasing note: at grazing distances far from the camera the grid lines
+/// shimmer / moiré as adjacent rays alternate between "on-line" and
+/// "off-line" samples. This is **intentional** — the flickering pattern
+/// sells the TRON "infinite digital plane" look. If we ever want a clean
+/// render we'll need supersampling at floor sample time.
 const FLOOR_GRID_LINE_WIDTH: f64 = 0.06;
 
 /// Wall texturer that paints every surface with a single flat gray,

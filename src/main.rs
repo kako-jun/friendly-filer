@@ -43,11 +43,21 @@ const RAY_MAX_DEPTH: f64 = 32.0;
 struct TerminalGuard;
 
 impl TerminalGuard {
+    /// Enter raw mode and then the alternate screen, returning a guard
+    /// that restores both on drop.
+    ///
+    /// Ordering rationale:
+    /// - If [`enable_raw_mode`] fails, `Self` is never constructed, so
+    ///   `Drop` does not run. That is correct: we never transitioned
+    ///   into raw mode and the terminal is still in its original state,
+    ///   so there is nothing to undo.
+    /// - After [`enable_raw_mode`] succeeds we construct `Self` first,
+    ///   *then* call `execute!(EnterAlternateScreen, Hide)`. If those
+    ///   subsequent calls fail, the guard still exists and its `Drop`
+    ///   will run — disabling raw mode (and best-effort restoring the
+    ///   screen / cursor) so the user's shell is not left in raw mode.
     fn new() -> anyhow::Result<Self> {
         enable_raw_mode()?;
-        // Construct `Self` immediately so that if the subsequent `execute!`
-        // fails, `Drop` still runs and disables raw mode. Otherwise a mid-
-        // construction failure would leak raw mode into the user's shell.
         let guard = Self;
         execute!(stdout(), EnterAlternateScreen, Hide)?;
         Ok(guard)
@@ -96,6 +106,13 @@ fn main() -> anyhow::Result<()> {
     let mut input_state = InputState::new();
 
     loop {
+        // FIXME: ターミナルリサイズに未対応 (#13/#16 で対応予定)
+        // Mark the start of this frame up-front so the pacing sleep at
+        // the bottom accounts for the time spent polling input, running
+        // physics, casting rays and writing to stdout — not just the
+        // physics integration window.
+        let frame_start = Instant::now();
+
         // Poll with a 0-duration timeout so the loop runs at the target
         // frame rate instead of stalling on slow keyboard input.
         let input = poll_frame_input(&mut input_state, Duration::ZERO)?;
@@ -171,7 +188,11 @@ fn main() -> anyhow::Result<()> {
         present(&fb)?;
 
         // --- Frame pacing ---
-        let elapsed = last_tick.elapsed();
+        // Measure from `frame_start` so the sleep compensates for the
+        // full frame (input poll + physics + render + present). Using
+        // `last_tick` here instead would underestimate the elapsed time
+        // because it was re-bound right after the input poll.
+        let elapsed = frame_start.elapsed();
         if elapsed < frame_target {
             std::thread::sleep(frame_target - elapsed);
         }
@@ -189,13 +210,27 @@ fn draw_hud(fb: &mut Framebuffer, player: &Player, fps_off: bool) {
     let glyph_w = font.glyph_width() as i32;
 
     let mode = if fps_off { "FPS-OFF" } else { "FPS" };
-    let text = format!(
+    let full = format!(
         "pos=({:.1},{:.1},{:.1}) yaw={:.2} pitch={:.2} vz={:.1} hp={} MODE={}",
         player.x, player.y, player.z, player.yaw, player.pitch, player.vz, player.hp, mode
     );
 
     let fb_h = fb.height() as i32;
     let fb_w = fb.width() as i32;
+
+    // Prefer the verbose form; fall back to a compact single-line read-out
+    // when the framebuffer isn't wide enough to fit it. The short form
+    // drops the vz / mode labels and uses single-letter prefixes.
+    let full_px = 2 + full.chars().count() as i32 * glyph_w;
+    let text = if full_px <= fb_w {
+        full
+    } else {
+        format!(
+            "P{:.1},{:.1} Y{:.2} P{:.0} V{:.0} H{} {}",
+            player.x, player.y, player.yaw, player.pitch, player.vz, player.hp, mode
+        )
+    };
+
     let y = (fb_h - glyph_h - 2).max(0);
 
     for (i, ch) in text.chars().enumerate() {

@@ -75,17 +75,52 @@ pub const PLAYER_RADIUS: f64 = 0.25;
 /// succeed — giving the classic "slide along the wall" feel without
 /// requiring a full circle / rectangle sweep.
 pub fn step_movement(player: &mut Player, forward: f64, strafe: f64, dt: f64, map: &dyn TileMap) {
+    // Defensive: non-positive dt (clock skew, paused frame) must never
+    // advance state. Without this guard a negative dt would actually move
+    // the player *backwards* along the intent vector.
+    if dt <= 0.0 {
+        return;
+    }
+
     let (sin, cos) = player.yaw.sin_cos();
     // forward: (cos, sin), right: (-sin, cos). Same convention as
     // termray::Camera::{forward, right}.
-    let dx = (cos * forward + -sin * strafe) * dt;
+    let dx = (cos * forward - sin * strafe) * dt;
     let dy = (sin * forward + cos * strafe) * dt;
 
-    if !blocked_at(map, player.x + dx, player.y) {
-        player.x += dx;
+    let start_x = player.x;
+    let start_y = player.y;
+
+    // Axis-aligned slide: try x alone, then y alone from the post-x
+    // position. Either or both may be rejected — the surviving axis
+    // still counts as motion.
+    if !blocked_at(map, start_x + dx, start_y) {
+        player.x = start_x + dx;
     }
-    if !blocked_at(map, player.x, player.y + dy) {
-        player.y += dy;
+    if !blocked_at(map, player.x, start_y + dy) {
+        player.y = start_y + dy;
+    }
+
+    // Inside-corner rescue: the per-axis checks above each look at a
+    // bounding box plus four diagonal corners, but the combined
+    // `(new_x, new_y)` position can still end up inside a solid tile if
+    // the axes are committed in sequence (the x move opens a slot the
+    // subsequent y move then overlaps). Re-check the final pose and
+    // unwind the second-committed axis (y) first, then x, preferring
+    // "slide on one axis" over "stop entirely" when possible.
+    if blocked_at(map, player.x, player.y) {
+        // Undo y, keep x. If that is still blocked, undo x instead and
+        // keep the original y-only attempt.
+        player.y = start_y;
+        if blocked_at(map, player.x, player.y) {
+            player.x = start_x;
+            // Try the y-only attempt from the fresh start.
+            if !blocked_at(map, start_x, start_y + dy) {
+                player.y = start_y + dy;
+            }
+            // If that is still blocked we've simply stopped — both axes
+            // lose and the player remains at the original position.
+        }
     }
 }
 
@@ -123,13 +158,18 @@ pub fn step_gravity(player: &mut Player, dt: f64) {
     if player.z <= GROUND_Z && player.vz == 0.0 {
         // Already at rest on the floor. Skip the integration so
         // floating-point drift doesn't lift the player off the ground.
+        player.on_ground = true;
         return;
     }
+    // Any non-zero vz means the player has left the ground (either from
+    // a jump or from walking off a ledge with negative vz).
+    player.on_ground = false;
     player.vz -= GRAVITY * dt;
     player.z += player.vz * dt;
     if player.z <= GROUND_Z {
         player.z = GROUND_Z;
         player.vz = 0.0;
+        player.on_ground = true;
     }
 }
 
@@ -137,8 +177,9 @@ pub fn step_gravity(player: &mut Player, dt: f64) {
 /// `true` if a jump was actually issued (so the HUD / sfx can react), or
 /// `false` if the request was ignored (already airborne).
 pub fn try_jump(player: &mut Player) -> bool {
-    if player.z == GROUND_Z && player.vz == 0.0 {
+    if player.on_ground {
         player.vz = JUMP_INITIAL_VZ;
+        player.on_ground = false;
         true
     } else {
         false
@@ -250,6 +291,120 @@ mod tests {
         );
     }
 
+    /// Map with an inside-corner: cells `(2, 2)` and `(2, 3)` solid, forming
+    /// an L-shape that the player can try to squeeze into diagonally.
+    struct CornerMap;
+    impl TileMap for CornerMap {
+        fn width(&self) -> usize {
+            5
+        }
+        fn height(&self) -> usize {
+            5
+        }
+        fn get(&self, x: i32, y: i32) -> Option<termray::TileType> {
+            if (x, y) == (2, 2) || (x, y) == (3, 2) {
+                Some(termray::TILE_WALL)
+            } else {
+                Some(termray::TILE_EMPTY)
+            }
+        }
+        fn is_solid(&self, x: i32, y: i32) -> bool {
+            (x, y) == (2, 2) || (x, y) == (3, 2)
+        }
+    }
+
+    /// Map where every surrounding cell is solid — the player is in a
+    /// 1-cell prison and cannot move in any direction.
+    struct CageMap;
+    impl TileMap for CageMap {
+        fn width(&self) -> usize {
+            3
+        }
+        fn height(&self) -> usize {
+            3
+        }
+        fn get(&self, x: i32, y: i32) -> Option<termray::TileType> {
+            if (x, y) == (1, 1) {
+                Some(termray::TILE_EMPTY)
+            } else {
+                Some(termray::TILE_WALL)
+            }
+        }
+        fn is_solid(&self, x: i32, y: i32) -> bool {
+            (x, y) != (1, 1)
+        }
+    }
+
+    #[test]
+    fn step_movement_diagonal_into_inside_corner_does_not_phase_through() {
+        // Stand south-west of the L-corner block (2..=3, 2) and push
+        // north-east at 45°. If the axis-aligned slide committed both
+        // axes blindly the player would end up inside the wall row.
+        // The final-position re-check must unwind far enough to keep
+        // the final pose out of every solid cell.
+        let mut p = Player::new(1.7, 1.7, 0.0);
+        p.z = GROUND_Z;
+        // yaw = π/4 so forward points north-east; strafe 0.
+        p.yaw = std::f64::consts::FRAC_PI_4;
+        step_movement(&mut p, 5.0, 0.0, 0.1, &CornerMap);
+        assert!(
+            !CornerMap.is_solid(p.x.floor() as i32, p.y.floor() as i32),
+            "player ended inside a solid cell at ({}, {})",
+            p.x,
+            p.y
+        );
+        // The bounding box must also not overlap a solid tile on any of
+        // the eight sample points used by `blocked_at`.
+        let r = PLAYER_RADIUS;
+        for (tx, ty) in [
+            (p.x - r, p.y),
+            (p.x + r, p.y),
+            (p.x, p.y - r),
+            (p.x, p.y + r),
+            (p.x - r, p.y - r),
+            (p.x + r, p.y - r),
+            (p.x - r, p.y + r),
+            (p.x + r, p.y + r),
+        ] {
+            assert!(
+                !CornerMap.is_solid(tx.floor() as i32, ty.floor() as i32),
+                "player radius overlaps solid cell via ({}, {})",
+                tx,
+                ty
+            );
+        }
+    }
+
+    #[test]
+    fn step_movement_both_axes_blocked_completely_stops() {
+        let mut p = Player::new(1.5, 1.5, 0.0);
+        p.z = GROUND_Z;
+        // yaw = π/4 so both forward x and forward y would push into a wall.
+        p.yaw = std::f64::consts::FRAC_PI_4;
+        let (x0, y0) = (p.x, p.y);
+        step_movement(&mut p, 5.0, 0.0, 0.1, &CageMap);
+        assert!((p.x - x0).abs() < 1e-12, "x should not have moved");
+        assert!((p.y - y0).abs() < 1e-12, "y should not have moved");
+    }
+
+    #[test]
+    fn step_movement_zero_dt_is_noop() {
+        let mut p = spawn();
+        let (x0, y0) = (p.x, p.y);
+        step_movement(&mut p, 1.0, 1.0, 0.0, &OpenMap);
+        assert!((p.x - x0).abs() < 1e-12);
+        assert!((p.y - y0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn step_movement_negative_dt_does_not_advance() {
+        let mut p = spawn();
+        let (x0, y0) = (p.x, p.y);
+        step_movement(&mut p, 1.0, 1.0, -0.1, &OpenMap);
+        assert!((p.x - x0).abs() < 1e-12);
+        assert!((p.y - y0).abs() < 1e-12);
+    }
+
     #[test]
     fn gravity_pulls_z_down_when_airborne() {
         let mut p = spawn();
@@ -282,11 +437,33 @@ mod tests {
         let mut p = spawn();
         assert!(try_jump(&mut p));
         assert_eq!(p.vz, JUMP_INITIAL_VZ);
+        assert!(!p.on_ground);
         // Second call while airborne must refuse.
         assert!(!try_jump(&mut p));
         // Simulate landing.
         p.z = GROUND_Z;
         p.vz = 0.0;
+        p.on_ground = true;
+        assert!(try_jump(&mut p));
+    }
+
+    #[test]
+    fn try_jump_after_jump_returns_false_until_landing() {
+        let mut p = spawn();
+        assert!(try_jump(&mut p));
+        assert!(!p.on_ground);
+        // Several mid-air jump requests must all be refused.
+        for _ in 0..5 {
+            assert!(!try_jump(&mut p));
+        }
+        // Integrate gravity until we land.
+        for _ in 0..200 {
+            step_gravity(&mut p, 0.016);
+            if p.on_ground {
+                break;
+            }
+        }
+        assert!(p.on_ground, "expected player to land after sufficient dt");
         assert!(try_jump(&mut p));
     }
 

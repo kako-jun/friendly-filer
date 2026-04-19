@@ -37,6 +37,12 @@ pub struct DirScene {
     pub player_spawn: (f64, f64),
     /// Yaw the camera faces at spawn, in radians. `0.0` looks +x.
     pub spawn_yaw: f64,
+    // The following fields are populated by `placeholder()` but not yet
+    // consumed by the render / combat path. They are `pub` so the frame
+    // loop can iterate them once the features land:
+    //   - `enemies`  — wired up in #9 (enemy rendering + AI)
+    //   - `portals`  — wired up in #11 (portal geometry + traversal)
+    //   - `monolith` / `parent_gate` — HUD overlays and navigation in #13
     pub enemies: Vec<Enemy>,
     pub portals: Vec<Portal>,
     pub monolith: Monolith,
@@ -130,9 +136,9 @@ mod tests {
     fn camera_is_at_spawn_with_default_fov() {
         let s = DirScene::placeholder();
         let cam = s.camera();
-        assert!((cam.x - 1.5).abs() < 1e-12);
-        assert!((cam.y - 1.5).abs() < 1e-12);
-        assert!((cam.angle - 0.0).abs() < 1e-12);
+        assert!((cam.x - s.player_spawn.0).abs() < 1e-12);
+        assert!((cam.y - s.player_spawn.1).abs() < 1e-12);
+        assert!((cam.angle - s.spawn_yaw).abs() < 1e-12);
         assert!((cam.fov - DEFAULT_FOV_RAD).abs() < 1e-12);
     }
 }
