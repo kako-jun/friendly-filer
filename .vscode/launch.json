@@ -4,15 +4,15 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug Felipe",
+            "name": "Debug friendly-filer",
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=felipe",
-                    "--package=felipe"
+                    "--bin=friendly-filer",
+                    "--package=friendly-filer"
                 ],
                 "filter": {
-                    "name": "felipe",
+                    "name": "friendly-filer",
                     "kind": "bin"
                 }
             },
@@ -26,16 +26,16 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug Felipe (Release)",
+            "name": "Debug friendly-filer (Release)",
             "cargo": {
                 "args": [
                     "build",
                     "--release",
-                    "--bin=felipe",
-                    "--package=felipe"
+                    "--bin=friendly-filer",
+                    "--package=friendly-filer"
                 ],
                 "filter": {
-                    "name": "felipe",
+                    "name": "friendly-filer",
                     "kind": "bin"
                 }
             },

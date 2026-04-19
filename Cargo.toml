@@ -11,7 +11,7 @@ repository = "https://github.com/kako-jun/friendly-filer"
 readme = "README.md"
 keywords = ["file-manager", "tui", "raycasting", "terminal", "3d"]
 categories = ["command-line-utilities", "filesystem"]
-exclude = [".github/", "target/"]
+exclude = [".github/", ".vscode/", "docs/", "CLAUDE.md", "target/"]
 
 [dependencies]
 termray = "0.3"
