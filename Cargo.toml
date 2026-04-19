@@ -1,33 +1,23 @@
 [package]
-name = "felipe"
+name = "friendly-filer"
 version = "0.1.0"
-edition = "2021"
-description = "Cyberpunk file manager - anagram of Filepe (FILE + pe)"
-authors = ["Felipe Contributors"]
+edition = "2024"
+rust-version = "1.85.0"
+authors = ["kako-jun"]
 license = "MIT"
+description = "TUI 3D first-person file manager powered by termray"
+homepage = "https://github.com/kako-jun/friendly-filer"
+repository = "https://github.com/kako-jun/friendly-filer"
+readme = "README.md"
+keywords = ["file-manager", "tui", "raycasting", "terminal", "3d"]
+categories = ["command-line-utilities", "filesystem"]
+exclude = [".github/", ".vscode/", "docs/", "CLAUDE.md", "target/"]
 
 [dependencies]
-bevy = { version = "0.14", default-features = false, features = [
-    "bevy_winit",
-    "bevy_render",
-    "bevy_core_pipeline",
-    "bevy_sprite",
-    "bevy_text",
-    "bevy_ui",
-    "bevy_gizmos",
-    "bevy_pbr",
-    "default_font",
-    "tonemapping_luts",
-    "png",
-    "x11",
-] }
+termray = "0.3"
+crossterm = "0.29"
+anyhow = "1"
 
-[profile.dev]
-opt-level = 1
-
-[profile.dev.package."*"]
-opt-level = 3
-
-# Enable fast compiles for development
 [profile.release]
-lto = "thin"
+lto = true
+codegen-units = 1

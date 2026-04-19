@@ -1,211 +1,62 @@
-# Felipe - Cyberpunk File Manager
+# friendly-filer
 
-## コンセプト
+## Overview
 
-**「ファイルシステムにダイブする」体験を作る**
+TUI 3D first-person file manager. Rust + crossterm. termray-powered raycasting — walk through your filesystem as if it were a city, with file names floating as labels above sprites.
 
-90年代〜00年代SFが描いた未来のUI美学を現代に蘇らせる。
-実用性を犠牲にしない、日常使いできるファイラー。
+(Formerly `felipe`, renamed on 2026-04-16. The bevy-based predecessor was deleted in Phase 0 / #2; it lives in git history only.)
 
-## インスピレーション
+## Architecture
 
-- **初代TRON** (1982) - デジタル世界へのダイブ感、ワイヤーフレームの美学
-- **攻殻機動隊** - オレンジ一色の端末UI
-- **パトレイバー** - HOS、軍用OS的な無骨さ
-- **エヴァンゲリオン** - NERV端末のワイヤーフレームUI
-- **仮面ライダーW フィリップの書架** - 無限に続く本棚の回廊を飛び回る
+Single-crate binary depending on the external [`termray`](https://github.com/kako-jun/termray) crate (0.3+).
 
-## 名前の由来
+- `src/main.rs` — entry point, input loop, frame presentation (crossterm half-block output)
+- `src/lib.rs` — public surface. Empty at Phase 0, will grow with each phase
+- `src/scene.rs` (Phase 1) — `DirScene`: `TileMap` + `HeightMap` + sprites + labels from a directory
+- `src/nav.rs` (Phase 2) — camera + Wizardry/free navigation modes
+- `src/ops.rs` (Phase 3) — file operations (open, delete, rename, copy, move)
+- `src/atmosphere.rs` (Phase 4) — theme, fog, per-depth color shift
 
-**Felipe** = Filepe のアナグラム
+termray (external) owns raycasting: DDA walls, per-column ray-floor intersection, sprite and label projection. friendly-filer injects file-manager semantics (directory → scene, file → sprite, name → label) through `WallTexturer` / `FloorTexturer` / `SpriteArt` / `GlyphRenderer` trait impls.
 
-```
-Felipe  ←→  Filepe
-  ↑↓          ↑↓
-  e↔i で入れ替え
-```
+## Operation model (planned)
 
-- **Filepe** = FILE + pe (Parallel Experience / Point of Entry)
-- e と i を入れ替えると **Felipe**（フィリップのスペイン語版）
-- ロゴ: e↔i の入れ替え矢印（Amazonのa→zのように）
+- **Wizardry-style grid navigation** — turn in 90° steps, step cell-by-cell. Primary mode for comfortable browsing on narrow terminals.
+- **Free navigation** — smooth movement for when you actually want to look around.
+- **Label-first selection** — sprites are files; selecting a sprite invokes an OS-delegated action (open / reveal) via `open` or the platform equivalent.
 
-## 差別化ポイント
+## Atmosphere (planned)
 
-### 1. 子孫フォルダの同時一覧
+Design notes inherited from the `felipe` era:
 
-既存ファイラーは1階層ずつしか見えない。Felipeは3D空間で複数階層を同時に表示。
+- Folder depth = terrain height. Big trees stand tall, empty subtrees are flat.
+- Made in Abyss / Evangelion mood — fog, cool palettes, subdued saturation, a sense of descending into something deep.
+- Theme is configurable per directory; per-depth color shift makes nesting visually obvious.
 
-```
-/project
-   ├── src/          ← 見える
-   │   ├── main.rs   ← 同時に見える
-   │   └── lib/      ← 同時に見える
-   │       └── utils.rs  ← これも見える
-   └── docs/
-```
+All of this lands in Phase 1 (scene build) and Phase 4 (polish).
 
-子フォルダは親の**右方向**に展開。全体が同一平面で見渡せる。
+## Build & run
 
-### 深度演出（メイドインアビス/エヴァ風）
-
-深い階層ほど「危険」な雰囲気に：
-
-| 深度 | 演出 |
-|------|------|
-| 1-2層 | 明るいオレンジ、クリア |
-| 3-5層 | 薄暗くなる |
-| 6層以上 | 画面端にノイズ、色が赤みを帯びる |
-| 10層以上 | 「深淵」— 視界が狭まる |
-
-→ 目的のファイルを探す**冒険感**、エクスプローラーでやらない理由になる
-
-### 2. ファイルサイズの可視化
-
-| 要素 | 視覚表現 | サイズの意味 |
-|------|----------|-------------|
-| **ファイル** | 本の**高さ** | ファイルサイズ |
-| **フォルダ** | 本棚の**奥行き** | 中身の合計サイズ |
-
-```
-遠くから見たとき:
-
-  ░░░░░░░░░░░░░░░░░░░░░   ← 奥行きのある本棚 (node_modules)
-
-  ░░░░     ← 浅い本棚 (docs)
-
-       ▓▓▓▓
-       ▓▓▓▓  ← 高い本 (4GB動画)
-  ░░░░░▓▓▓▓░░░░░░░░░
+```bash
+cargo run --release
+cargo clippy --all-targets -- -D warnings
+cargo fmt --all
 ```
 
-- 「あの本棚、やけに奥まで続いてるな」→ 重いフォルダ
-- 「あの本、異様に高いな」→ 巨大ファイル
-- node_modules → 奥行きの深い迷宮
-- 単発の動画ファイル → 本棚は浅いが、塔がそびえる
+## Current phase
 
-WinDirStatは「分析」、Felipeは「探索・散歩」。
+Phase 0 — skeleton. `cargo run` blanks the framebuffer to dark blue-grey for ~0.8 s then exits cleanly. The Cargo manifest, CI/release workflows, and documentation are in place; Phase 1+ will make it interactive.
 
-### 3. Parallel Experience
+## Roadmap
 
-- 複数のディレクトリを3D空間に同時配置
-- 回廊間でファイルを移動
-- 比較ビュー
+| Phase | Issue | Scope |
+|---|---|---|
+| 0 | #2 | Rebuild on termray 0.3 (this) |
+| 1 | #3 | Filesystem → termray scene conversion |
+| 2 | #4 | First-person navigation (Wizardry + free) |
+| 3 | #5 | File operations (open / delete / rename / copy / move) |
+| 4 | #6 | UX polish: atmosphere, themes, config |
 
-## 設計思想
+## Historical notes
 
-### UI/UX
-
-- **カラー**: オレンジ (#FF6600系) + 黒背景
-- **スタイル**: ワイヤーフレーム、グリッド、走査線エフェクト
-- **フォント**: 等幅、レトロフューチャー感
-
-### 操作体系
-
-#### キーボード
-
-- **Vimキーバインド** がファーストクラス
-  - `h/j/k/l` - 2D/3D空間での移動
-  - `Ctrl+u/d` - 階層のダイブ/浮上
-  - `/` - 検索
-  - `y/d/p` - ヤンク/削除/ペースト
-- **矢印キー** = `hjkl` と同じ動作
-
-#### マウス
-
-- **クリック** - ファイル/フォルダを選択
-- **ダブルクリック** - 開く/フォルダに入る
-- **ホイール** - ズームイン/アウト
-- **右クリック** - OS標準コンテキストメニュー
-- FPS風の視点ドラッグは**なし**（シンプルに保つ）
-
-### 3D空間の移動
-
-- **直角移動のみ**（ウィザードリィ式）— 斜め移動・ジャンプなし
-- **パス直打ち** が基本 — 広大なエリアを効率的に移動
-- **瞬間移動ではなく「走っていく」** — 途中の景色が流れる演出
-  - `/var/log` と入力 → カメラが回廊を駆け抜けていく
-  - 空間記憶に残る：「あの辺りにあった」
-
-### 画面構成
-
-```
-+----------------------------------+
-|                                  |
-|     3D 書架空間 (メイン)          |
-|     ディレクトリを回廊として表現    |
-|     ファイルを本として表現         |
-|                                  |
-|                      +--------+  |
-|                      |2D Map  |  |
-|                      |ミニマップ|  |
-+----------------------+--------+--+
-|  ステータスライン / コマンドライン  |
-+----------------------------------+
-```
-
-### 完成形のビジョン
-
-1. **3Dメインビュー**: フィリップの書架のような無限回廊
-2. **2Dミニマップ**: 右下に現在位置を俯瞰表示
-3. **Vimライクな操作**: モーダル操作（Normal/Visual/Command）
-
-## 技術スタック
-
-- **言語**: Rust
-- **フレームワーク**: Bevy (ゲームエンジン、コードファースト)
-- **描画**: wgpu (Bevy内蔵)
-- **対応OS**: Windows / macOS / Linux
-
-### なぜBevyか
-
-- 全部コードで書ける（GUIエディタ不要）
-- 速度は最高クラス
-- クロスプラットフォーム
-- ECS (Entity Component System) でゲーム的な構造が自然
-
-## 開発フェーズ
-
-### Phase 1: 2Dミニマップ (現在)
-- [x] プロジェクト初期化
-- [x] オレンジワイヤーフレームUIスタイル
-- [x] ディレクトリ構造の2D表示
-- [x] Vimキーバインドでの移動
-- [ ] 基本的なファイル操作
-
-### Phase 2: 3D書架空間
-- [x] 3Dワイヤーフレームグリッド
-- [x] カメラ移動（俯瞰ビュー、スムーズ追従）
-- [x] ファイル/フォルダを3D直方体として表現
-- [x] ファイルサイズ = 本の高さ（対数スケール）
-- [x] マウスホイールでズーム
-- [ ] 2Dミニマップとの連動
-- [ ] 深度演出（深い階層で暗く）
-- [ ] 子孫フォルダの右方向展開
-
-### Phase 3: 洗練
-- [ ] 走査線エフェクト
-- [ ] アニメーション（ダイブ時の演出）
-- [ ] 検索UI
-- [ ] プレビュー機能
-- [ ] マウスクリックで選択
-
-### Phase 4: 夢 (将来)
-- [ ] git履歴を「世界線」として可視化
-- [ ] 過去のコミット時点にダイブ
-- [ ] ブランチ = 分岐した世界線
-- [ ] OS標準ダイアログをキャプチャして3D空間に表示
-
-## 設計方針
-
-### ファイル操作はOS標準に委譲
-
-- コピー/移動先選択 → OS標準ダイアログ (`rfd` クレート)
-- 削除確認 → OS標準確認ダイアログ
-- ファイルを開く → OSのデフォルトアプリ
-
-Felipeは「ナビゲーション体験」に集中。車輪の再発明を避ける。
-
-## メモ
-
-- 実用性は重要。速度、安定性を犠牲にしない
-- 「かっこいいだけ」で終わらせない、本当に毎日使えるものを
+Before the 2026-04-16 rename, this repo was `felipe` — a bevy-based 3D cyberpunk file manager (`src/main.rs` at 654 lines, depending on bevy 0.14 with PBR + winit + x11). The binary name candidate "フィリップ" was a design-document persona for that era. The current design drops bevy entirely in favor of termray's TUI raycasting; the bevy code was removed in the commit that opened Phase 0.
