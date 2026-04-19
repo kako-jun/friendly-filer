@@ -8,11 +8,11 @@
 //!   #8 demo's `main.rs` so both the frame loop and future offline
 //!   renderers can share it.
 //! - [`WallTextureFlat`] — a stub [`WallTexturer`] that paints every wall
-//!   surface with [`palette::GEOMETRY_GRAY`] darkened by distance, outlined
+//!   surface with [`crate::palette::GEOMETRY_GRAY`] darkened by distance, outlined
 //!   implicitly by termray's darken-by-distance falloff. Real TRON wall
 //!   treatment (blue edges, per-face shading) lands with #12 / #14.
 //! - [`FloorTextureGrid`] — a two-tone grid [`FloorTexturer`] that alternates
-//!   [`palette::GRID_BLUE`] cell borders against [`palette::BG_BLACK`]
+//!   [`crate::palette::GRID_BLUE`] cell borders against [`crate::palette::BG_BLACK`]
 //!   interiors. Matches the TRON "infinite floor grid" look of the #8
 //!   demo but now driven by real ray-floor intersection.
 
