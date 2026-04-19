@@ -16,6 +16,7 @@ pub mod config;
 pub mod disc;
 pub mod enemy;
 pub mod hud;
+pub mod input;
 pub mod menu;
 pub mod palette;
 pub mod physics;
