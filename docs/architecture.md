@@ -63,30 +63,59 @@ feeding it the scene data produced by `DirScene`.
 | `menu.rs` | skeleton (#8) | `Operation { Open, Rename, Move, Copy, Delete, Info, Cancel }` and `MenuContext { File, Swarm, Folder, Monolith }`. Real menu + effects land in #12. |
 | `hud.rs` | skeleton (#8) | `Hud { hp, score, .. }`, `Mode { Fps, FpsOff, Frozen, Crashed }`. Full HUD lands in #13. |
 | `config.rs` | skeleton (#8) | `Config` with `Default`, `AimStyle { Keyboard, Mouse }`. Real TOML loader lands in #17. |
-| `scene.rs` | skeleton (#8) | `DirScene` placeholder returning a single dummy enemy. Real directory → scene conversion lands in #3 (absorbed into the FPS layer). |
-| `main.rs` | demo (#8) | Renders one TRON-palette frame (black bg, blue grid, red enemy placeholder, blue banner) for ~0.8 s and exits. |
+| `scene.rs` | extended (#18) | `DirScene` now owns an 8×8 `GridMap` + `FlatHeightMap` + `spawn_yaw`, with `map()` / `heights()` / `camera()` accessors that feed termray's raycaster. Real `read_dir` → scene work still lands in #3. |
+| `input.rs` | done (#18) | Crossterm `event::poll` → `FrameInput { forward, strafe, run, jump, yaw_delta, pitch_delta, toggle_fps_off, quit }`. Press / Repeat are both treated as one frame of input; Release is ignored. Mouse aim is deferred to #16. |
+| `physics.rs` | done (#18) | Pure functions on `Player`: `step_movement` (axis-aligned Doom slide), `step_gravity`, `try_jump`, `add_yaw`, `add_pitch`. Tunables live as module `pub const`s; TOML config lands in #17. |
+| `render.rs` | done (#18) | Framebuffer → stdout `present()` (half-block), plus `WallTextureFlat` and `FloorTextureGrid` TRON adapters for termray's `WallTexturer` / `FloorTexturer` traits. |
+| `main.rs` | FPS loop (#18) | 60 FPS frame loop: input → physics → camera sync → `cast_all_rays` → `render_floor_ceiling` + `render_walls` → debug HUD → `present`. Esc / q quit; F1 toggles FPS-OFF mode. The #8 static demo frame has been removed. |
 
-## Current state (#8 skeleton)
+## Current state (#18 playable walk-around)
 
 What `cargo run` does today:
 
-1. Reads terminal size via `crossterm::terminal::size`.
-2. Allocates a `termray::Framebuffer` sized to the terminal (half-block
-   vertical doubling applied).
-3. Paints a single TRON-palette frame:
-   - black background,
-   - converging blue floor grid with a blue horizon line,
-   - a gray-filled, red-outlined rectangle in the middle as an enemy
-     placeholder,
-   - a blue `Font8x8` banner near the bottom.
-4. Enters the alternate screen, hides the cursor, enables raw mode via
-   a RAII `TerminalGuard`.
-5. Sleeps 800 ms so the frame is visible.
-6. Drops the guard, restoring the terminal, and exits cleanly.
+1. Reads terminal size via `crossterm::terminal::size` and allocates a
+   half-block-doubled `termray::Framebuffer`.
+2. Builds an 8×8 `DirScene::placeholder()` — solid outer ring, 6×6
+   walkable interior, one demo enemy, one central monolith.
+3. Enters the alternate screen + raw mode via `TerminalGuard`.
+4. Runs a 60 FPS frame loop driving the **real** termray raycaster:
+   - `input::poll_frame_input` drains crossterm events into a
+     `FrameInput`;
+   - `physics::step_movement` / `try_jump` / `step_gravity` /
+     `add_yaw` / `add_pitch` update the `Player`;
+   - `Camera::set_pose` / `set_z` / `set_pitch` sync the camera;
+   - `render_floor_ceiling` + `render_walls` rasterize the frame into
+     the framebuffer using `FloorTextureGrid` + `WallTextureFlat`;
+   - a single `Font8x8` debug line prints pos / yaw / pitch / vz /
+     HP / MODE at the bottom of the screen;
+   - `render::present` flushes the framebuffer with half-block
+     characters, then the loop sleeps to hit the 16 ms frame budget.
+5. Esc or `q` terminates; `TerminalGuard::drop` restores the terminal.
 
-No input loop, no filesystem reads, no real enemies, no disc, no menu —
-those arrive with issues #9–#18. All 10 simulation-layer unit tests are
-green.
+The #8 static demo frame (hand-drawn floor fan, red enemy rectangle,
+bottom-centre banner) has been removed. The draw_floor_grid /
+draw_enemy_placeholder / draw_banner helpers are gone, replaced by the
+termray pipeline above.
+
+### Physics tunables (`src/physics.rs`)
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `MOVE_SPEED` | `3.0` | World units / second, walking. |
+| `RUN_MULTIPLIER` | `1.8` | Held-Shift sprint multiplier. |
+| `JUMP_INITIAL_VZ` | `4.5` | Upward velocity on jump. |
+| `GRAVITY` | `12.0` | Downward acceleration. |
+| `GROUND_Z` | `0.5` | Eye height on the floor (matches termray default). |
+| `AIM_YAW_RATE` | `2.0` | rad / s for arrow-key yaw. |
+| `AIM_PITCH_RATE` | `1.5` | rad / s for arrow-key pitch. |
+| `PITCH_MAX` | `π/2 − 0.05` | Pitch clamp (avoids tan() singularity). |
+| `PLAYER_RADIUS` | `0.25` | Collision circle radius. |
+
+All of these become TOML-overridable in #17.
+
+Enemy AI, disc physics and sealed-portal geometry still arrive with
+issues #9 – #17. The simulation-layer unit tests plus the new physics
+and render tests total 24 green.
 
 ## Sub-issue graph (FPS layer)
 

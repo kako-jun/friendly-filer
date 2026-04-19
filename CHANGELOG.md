@@ -7,6 +7,16 @@ All notable changes to friendly-filer are documented in this file. The format is
 ## [Unreleased]
 
 ### Added
+- Playable first-person walk-around ([#18](https://github.com/kako-jun/friendly-filer/issues/18)).
+  New `input.rs` (crossterm → `FrameInput`), `physics.rs` (WASD / Shift / Space / arrow
+  motion with axis-aligned Doom-style wall slide, gravity, jump, yaw wrap, pitch clamp),
+  and `render.rs` (half-block `present`, `WallTextureFlat`, `FloorTextureGrid` TRON
+  adapters). `DirScene::placeholder` now ships an 8×8 `GridMap` + `FlatHeightMap` +
+  `spawn_yaw` with `map()` / `heights()` / `camera()` accessors. `main.rs` becomes a
+  60 FPS loop driving termray's real `cast_all_rays` → `render_floor_ceiling` →
+  `render_walls` pipeline. F1 toggles an FPS-OFF mode (HUD label only until #16). Esc /
+  q quit cleanly. 24 unit tests green (8 physics + 4 render + 3 scene + previously-green
+  skeleton tests).
 - FPS layer skeleton ([#8](https://github.com/kako-jun/friendly-filer/issues/8)).
   New simulation-layer modules land in `src/`: `palette` (TRON 3-color constants),
   `player`, `enemy` (with extension-based classification + `log(size)` HP + `Swarm`),
