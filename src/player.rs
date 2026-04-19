@@ -24,6 +24,11 @@ pub struct Player {
     pub yaw: f64,
     pub pitch: f64,
     pub vz: f64,
+    /// True while the player is standing on the floor and can initiate a
+    /// jump. Cleared the moment [`crate::physics::try_jump`] fires or the
+    /// player leaves the ground; re-set on landing by
+    /// [`crate::physics::step_gravity`].
+    pub on_ground: bool,
     pub hp: u32,
     pub max_hp: u32,
 }
@@ -38,6 +43,7 @@ impl Player {
             yaw,
             pitch: 0.0,
             vz: 0.0,
+            on_ground: true,
             hp: DEFAULT_MAX_HP,
             max_hp: DEFAULT_MAX_HP,
         }
@@ -64,6 +70,7 @@ mod tests {
         assert_eq!(p.yaw, std::f64::consts::FRAC_PI_2);
         assert_eq!(p.pitch, 0.0);
         assert_eq!(p.vz, 0.0);
+        assert!(p.on_ground);
         assert_eq!(p.hp, DEFAULT_MAX_HP);
         assert_eq!(p.max_hp, DEFAULT_MAX_HP);
         assert!(!p.is_crashed());

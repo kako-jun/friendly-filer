@@ -1,32 +1,41 @@
-//! friendly-filer — FPS skeleton demo frame (Issue #8).
+//! friendly-filer — FPS frame loop (Issue #18).
 //!
-//! Renders a single TRON-styled frame for ~0.8 seconds and exits:
-//! black background, blue floor grid fading toward the horizon, a red
-//! enemy placeholder in the middle, and a small blue label at the bottom.
-//! Real input loop, enemy AI, disc physics and filesystem reads land in
-//! the #9–#18 sub-issues.
+//! Enters an alternate screen, drives a 60 FPS termray raycaster render
+//! loop, and wires crossterm key events through the physics module into
+//! the player pose. Esc / q quit cleanly. Enemy AI, disc physics, sprites
+//! and the real HUD arrive with #9 / #10 / #13; the HUD line at the bottom
+//! of the screen is a minimal debug readout.
 
-use std::io::{Write, stdout};
+use std::io::stdout;
+use std::time::{Duration, Instant};
 
 use crossterm::cursor::{Hide, Show};
 use crossterm::execute;
-use crossterm::style::{
-    Color as CtColor, Print, ResetColor, SetBackgroundColor, SetForegroundColor,
-};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode, size,
 };
-use termray::Framebuffer;
 use termray::label::{Font8x8, GlyphRenderer};
+use termray::{Framebuffer, render_floor_ceiling, render_walls};
 
-use friendly_filer::enemy::Enemy;
-use friendly_filer::palette::{BG_BLACK, ENEMY_RED, GEOMETRY_GRAY, GRID_BLUE, UI_BLUE};
+use friendly_filer::input::{InputState, poll_frame_input};
+use friendly_filer::palette::{BG_BLACK, UI_BLUE};
+use friendly_filer::physics::{
+    AIM_PITCH_RATE, AIM_YAW_RATE, GROUND_Z, MOVE_SPEED, RUN_MULTIPLIER, add_pitch, add_yaw,
+    step_gravity, step_movement, try_jump,
+};
+use friendly_filer::player::Player;
+use friendly_filer::render::{FloorTextureGrid, WallTextureFlat, present};
 use friendly_filer::scene::DirScene;
 
-/// Number of vertical grid lines converging on the vanishing point. Odd, so
-/// that one line sits dead centre. Raising this value packs the near rows
-/// tighter (the fan spreads the same width across more stems).
-const GRID_LINE_COUNT: i32 = 13;
+/// Target frame time in milliseconds. 16 ms ≈ 62.5 FPS — the terminal
+/// half-block renderer isn't pixel-perfect enough for higher rates to
+/// make a visible difference, and staying here keeps CPU usage polite.
+const FRAME_MS: u64 = 16;
+
+/// Maximum raycaster depth in world units. The 8×8 placeholder arena is
+/// bounded by 7.something units so 32 is comfortably beyond the far wall
+/// without wasting DDA steps on empty space.
+const RAY_MAX_DEPTH: f64 = 32.0;
 
 /// RAII guard that enters the alternate screen in raw mode on construction
 /// and restores the terminal on drop. Ensures the terminal is cleaned up
@@ -34,11 +43,21 @@ const GRID_LINE_COUNT: i32 = 13;
 struct TerminalGuard;
 
 impl TerminalGuard {
+    /// Enter raw mode and then the alternate screen, returning a guard
+    /// that restores both on drop.
+    ///
+    /// Ordering rationale:
+    /// - If [`enable_raw_mode`] fails, `Self` is never constructed, so
+    ///   `Drop` does not run. That is correct: we never transitioned
+    ///   into raw mode and the terminal is still in its original state,
+    ///   so there is nothing to undo.
+    /// - After [`enable_raw_mode`] succeeds we construct `Self` first,
+    ///   *then* call `execute!(EnterAlternateScreen, Hide)`. If those
+    ///   subsequent calls fail, the guard still exists and its `Drop`
+    ///   will run — disabling raw mode (and best-effort restoring the
+    ///   screen / cursor) so the user's shell is not left in raw mode.
     fn new() -> anyhow::Result<Self> {
         enable_raw_mode()?;
-        // Construct `Self` immediately so that if the subsequent `execute!`
-        // fails, `Drop` still runs and disables raw mode. Otherwise a mid-
-        // construction failure would leak raw mode into the user's shell.
         let guard = Self;
         execute!(stdout(), EnterAlternateScreen, Hide)?;
         Ok(guard)
@@ -65,235 +84,160 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // --- Scene + per-frame state ---
     let scene = DirScene::placeholder();
-    let mut fb = Framebuffer::new(fb_w, fb_h);
-    draw_tron_demo(&mut fb, &scene);
+    let mut player = Player::new(scene.player_spawn.0, scene.player_spawn.1, scene.spawn_yaw);
+    player.z = GROUND_Z;
 
+    let mut camera = scene.camera();
+    camera.set_z(GROUND_Z);
+
+    let wall_tx = WallTextureFlat;
+    let floor_tx = FloorTextureGrid;
+
+    let mut fb = Framebuffer::new(fb_w, fb_h);
+    let mut fps_off = false;
+
+    // --- Enter the alternate screen, then run the frame loop ---
     let _guard = TerminalGuard::new()?;
 
-    render_frame(&fb)?;
+    let frame_target = Duration::from_millis(FRAME_MS);
+    let mut last_tick = Instant::now();
+    let mut input_state = InputState::new();
 
-    // Fixed display time so the demo frame is visible before exit. Replaced
-    // by the real input loop + frame pacing in the #18 / #13 sub-issues.
-    std::thread::sleep(std::time::Duration::from_millis(800));
+    loop {
+        // FIXME: ターミナルリサイズに未対応 (#13/#16 で対応予定)
+        // Mark the start of this frame up-front so the pacing sleep at
+        // the bottom accounts for the time spent polling input, running
+        // physics, casting rays and writing to stdout — not just the
+        // physics integration window.
+        let frame_start = Instant::now();
+
+        // Poll with a 0-duration timeout so the loop runs at the target
+        // frame rate instead of stalling on slow keyboard input.
+        let input = poll_frame_input(&mut input_state, Duration::ZERO)?;
+        if input.quit {
+            break;
+        }
+        if input.toggle_fps_off {
+            fps_off = !fps_off;
+        }
+
+        // --- dt ---
+        let now = Instant::now();
+        let dt = now.duration_since(last_tick).as_secs_f64().min(0.1);
+        last_tick = now;
+
+        // --- Motion ---
+        // Each event is one frame's worth; scale by MOVE_SPEED × dt so the
+        // speed stays consistent if the terminal changes key-repeat rate.
+        let speed = if input.run {
+            MOVE_SPEED * RUN_MULTIPLIER
+        } else {
+            MOVE_SPEED
+        };
+        step_movement(
+            &mut player,
+            input.forward * speed,
+            input.strafe * speed,
+            dt,
+            scene.map(),
+        );
+
+        // --- Jump + gravity ---
+        if input.jump {
+            try_jump(&mut player);
+        }
+        step_gravity(&mut player, dt);
+
+        // --- Aim ---
+        if input.yaw_delta != 0.0 {
+            add_yaw(&mut player, input.yaw_delta * AIM_YAW_RATE * dt);
+        }
+        if input.pitch_delta != 0.0 {
+            add_pitch(&mut player, input.pitch_delta * AIM_PITCH_RATE * dt);
+        }
+
+        // --- Sync camera from player pose ---
+        camera.set_pose(player.x, player.y, player.yaw);
+        camera.set_z(player.z);
+        camera.set_pitch(player.pitch);
+
+        // --- Render ---
+        fb.clear(BG_BLACK);
+        let rays = camera.cast_all_rays(scene.map(), fb.width(), RAY_MAX_DEPTH);
+        render_floor_ceiling(
+            &mut fb,
+            &rays,
+            &floor_tx,
+            scene.heights(),
+            &camera,
+            RAY_MAX_DEPTH,
+        );
+        render_walls(
+            &mut fb,
+            &rays,
+            &wall_tx,
+            scene.heights(),
+            &camera,
+            RAY_MAX_DEPTH,
+        );
+
+        draw_hud(&mut fb, &player, fps_off);
+
+        present(&fb)?;
+
+        // --- Frame pacing ---
+        // Measure from `frame_start` so the sleep compensates for the
+        // full frame (input poll + physics + render + present). Using
+        // `last_tick` here instead would underestimate the elapsed time
+        // because it was re-bound right after the input poll.
+        let elapsed = frame_start.elapsed();
+        if elapsed < frame_target {
+            std::thread::sleep(frame_target - elapsed);
+        }
+    }
 
     Ok(())
 }
 
-/// Paint the TRON skeleton frame directly into the framebuffer. Order:
-/// clear → floor grid → horizon bar → enemy placeholder → HUD banner.
-fn draw_tron_demo(fb: &mut Framebuffer, scene: &DirScene) {
-    fb.clear(BG_BLACK);
-
-    let w = fb.width();
-    let h = fb.height();
-    if w == 0 || h == 0 {
-        return;
-    }
-
-    // Horizon sits slightly above centre — leaves more floor area for the
-    // grid, mimicking the termray camera tilt we'll adopt in #18.
-    let horizon = h / 2;
-
-    // ---------- Floor grid ----------
-    //
-    // A fake-perspective grid: lines spaced ~8 px on the near rows, spacing
-    // contracting toward the horizon. Cheap stand-in for real ray-floor
-    // intersection, which termray gives us in #3 / #9.
-    draw_floor_grid(fb, horizon);
-
-    // ---------- Horizon strip ----------
-    //
-    // A single bright blue line delineating ground from void.
-    for x in 0..w {
-        fb.set_pixel(x, horizon, GRID_BLUE);
-    }
-
-    // ---------- Enemy placeholder ----------
-    //
-    // Centred red rectangle driven by the first enemy in `scene`. Real
-    // per-enemy projection arrives with #9; here we just consume the
-    // scene's demo `Enemy` to prove the `DirScene → renderer` wire works.
-    if let Some(enemy) = scene.enemies.first() {
-        draw_enemy_placeholder(fb, horizon, enemy);
-    }
-
-    // ---------- HUD banner ----------
-    //
-    // Keep the version in sync with `Cargo.toml` by reading it from cargo at
-    // build time; `-dev` tracks the pre-release state of the #8 branch.
-    let banner = concat!(
-        "FRIENDLY-FILER v",
-        env!("CARGO_PKG_VERSION"),
-        "-dev - TRON MODE - #8"
-    );
-    draw_banner(fb, banner);
-}
-
-/// Thin blue horizontal lines at receding vertical spacing above the near
-/// edge, plus thin blue verticals converging toward the screen centre. Gives
-/// the visual impression of an infinite floor plane without requiring the
-/// real raycaster.
-fn draw_floor_grid(fb: &mut Framebuffer, horizon: usize) {
-    let w = fb.width();
-    let h = fb.height();
-    if horizon + 1 >= h {
-        return;
-    }
-
-    let floor_depth = h - horizon - 1;
-
-    // Horizontal grid lines: start at the near edge with a 2-pixel stride
-    // and widen it toward the horizon for perspective-like compression.
-    // Collect the rows first so the loop is a plain iterator instead of a
-    // manual underflow-guarded `while`.
-    let horizontal_rows = {
-        let mut rows = Vec::new();
-        let mut stride = 2usize;
-        let mut y = h - 1;
-        loop {
-            rows.push(y);
-            let next_y = match y.checked_sub(stride) {
-                Some(v) if v > horizon => v,
-                _ => break,
-            };
-            y = next_y;
-            stride = stride.saturating_add(1).min(floor_depth.max(1));
-        }
-        rows
-    };
-    for y in horizontal_rows {
-        for x in 0..w {
-            fb.set_pixel(x, y, GRID_BLUE);
-        }
-    }
-
-    // Vertical grid lines converge on a vanishing point at (cx, horizon).
-    // Sampling each floor row and projecting x positions outward produces
-    // the classic TRON perspective fan.
-    let cx = w as f64 / 2.0;
-    let half = GRID_LINE_COUNT / 2;
-    for y_row in (horizon + 1)..h {
-        let d = (y_row - horizon) as f64; // distance below horizon, in pixels
-        // Scale of the near plane relative to depth.
-        let spread = d / (floor_depth.max(1) as f64) * (w as f64 / 1.4);
-        for i in -half..=half {
-            let offset = i as f64 * spread / half as f64;
-            let x = cx + offset;
-            if x >= 0.0 && (x as usize) < w {
-                fb.set_pixel(x as usize, y_row, GRID_BLUE);
-            }
-        }
-    }
-}
-
-/// Red rectangle standing on the floor, roughly where the first hostile
-/// wireframe will be rendered by the real enemy pass. Filled in
-/// [`GEOMETRY_GRAY`] with an [`ENEMY_RED`] outline so the silhouette reads
-/// against the blue grid.
-///
-/// The `enemy` argument drives the screen-space placement via a trivial
-/// perspective-stand-in: `enemy.x` shifts the box horizontally around the
-/// screen centre, and `enemy.y` (forward distance in scene units) pushes it
-/// deeper into the floor. Real termray sprite projection arrives in #9.
-fn draw_enemy_placeholder(fb: &mut Framebuffer, horizon: usize, enemy: &Enemy) {
-    let w = fb.width();
-    let h = fb.height();
-
-    // Size the box as a fraction of screen dims so it scales with the
-    // terminal. Minimum dimensions keep it visible on 80×24.
-    let box_w = (w / 10).max(6);
-    let box_h = (h / 5).max(8);
-
-    // Project scene -> screen with a deliberately simple model: the
-    // vanishing point sits at (w/2, horizon); increasing `enemy.y` moves the
-    // base toward the horizon (smaller floor depth used), and `enemy.x`
-    // offsets horizontally scaled by that same depth. Good enough to
-    // demonstrate that `DirScene` data reaches the renderer.
-    let floor_depth = (h - horizon).max(1) as f64;
-    let depth_t = (enemy.y / 8.0).clamp(0.0, 0.95);
-    let base_offset = (floor_depth * (1.0 - depth_t) / 4.0).max(1.0) as usize;
-    let base_y = (horizon + base_offset).min(h.saturating_sub(1));
-    let screen_x_offset = enemy.x * (floor_depth * (1.0 - depth_t) / 16.0);
-    let cx = ((w as f64 / 2.0) + screen_x_offset).clamp(0.0, w as f64) as usize;
-
-    let top_y = base_y.saturating_sub(box_h);
-    let x0 = cx.saturating_sub(box_w / 2);
-    let x1 = (x0 + box_w).min(w);
-
-    // Gray fill.
-    for y in top_y..base_y {
-        for x in x0..x1 {
-            fb.set_pixel(x, y, GEOMETRY_GRAY);
-        }
-    }
-
-    // Red outline (top, bottom, sides). `set_pixel` is bounds-checked
-    // internally, so we don't need to guard `base_y - 1` / `x1 - 1` here.
-    for x in x0..x1 {
-        fb.set_pixel(x, top_y, ENEMY_RED);
-        fb.set_pixel(x, base_y.saturating_sub(1), ENEMY_RED);
-    }
-    for y in top_y..base_y {
-        fb.set_pixel(x0, y, ENEMY_RED);
-        fb.set_pixel(x1.saturating_sub(1), y, ENEMY_RED);
-    }
-}
-
-/// Draw a short ASCII banner near the bottom of the framebuffer, using
-/// termray's built-in 8×8 font. The text is clipped automatically by
-/// [`Font8x8::draw_glyph`], which skips out-of-range characters.
-fn draw_banner(fb: &mut Framebuffer, text: &str) {
+/// Tiny debug HUD shown at the bottom-left of the frame. Full HUD with HP
+/// bars, minimap and mode ornaments lands with Issue #13; for now we just
+/// need to see that movement / jumps / aim are affecting state.
+fn draw_hud(fb: &mut Framebuffer, player: &Player, fps_off: bool) {
     let font = Font8x8;
-    let glyph_w = font.glyph_width() as i32;
     let glyph_h = font.glyph_height() as i32;
+    let glyph_w = font.glyph_width() as i32;
 
-    let total_w = glyph_w * text.len() as i32;
-    let fb_w = fb.width() as i32;
+    let mode = if fps_off { "FPS-OFF" } else { "FPS" };
+    let full = format!(
+        "pos=({:.1},{:.1},{:.1}) yaw={:.2} pitch={:.2} vz={:.1} hp={} MODE={}",
+        player.x, player.y, player.z, player.yaw, player.pitch, player.vz, player.hp, mode
+    );
+
     let fb_h = fb.height() as i32;
+    let fb_w = fb.width() as i32;
 
-    // Centre horizontally, sit 2 glyphs above the bottom.
-    let start_x = ((fb_w - total_w) / 2).max(0);
-    let y = (fb_h - glyph_h * 2).max(0);
+    // Prefer the verbose form; fall back to a compact single-line read-out
+    // when the framebuffer isn't wide enough to fit it. The short form
+    // drops the vz / mode labels and uses single-letter prefixes.
+    let full_px = 2 + full.chars().count() as i32 * glyph_w;
+    let text = if full_px <= fb_w {
+        full
+    } else {
+        format!(
+            "P{:.1},{:.1} Y{:.2} P{:.0} V{:.0} H{} {}",
+            player.x, player.y, player.yaw, player.pitch, player.vz, player.hp, mode
+        )
+    };
+
+    let y = (fb_h - glyph_h - 2).max(0);
 
     for (i, ch) in text.chars().enumerate() {
-        let x = start_x + i as i32 * glyph_w;
-        if x >= fb_w {
+        let x = 2 + i as i32 * glyph_w;
+        if x + glyph_w > fb_w {
             break;
         }
         font.draw_glyph(fb, x, y, ch, UI_BLUE);
     }
-}
-
-/// Present the framebuffer using half-block characters: one cell = top pixel
-/// (foreground) + bottom pixel (background).
-fn render_frame(fb: &Framebuffer) -> anyhow::Result<()> {
-    let mut out = stdout();
-    let height = fb.height();
-    if height == 0 {
-        return Ok(());
-    }
-    for y in (0..height).step_by(2) {
-        for x in 0..fb.width() {
-            let top = fb.get_pixel(x, y);
-            let bot = fb.get_pixel(x, (y + 1).min(height - 1));
-            execute!(
-                out,
-                SetForegroundColor(CtColor::Rgb {
-                    r: top.r,
-                    g: top.g,
-                    b: top.b
-                }),
-                SetBackgroundColor(CtColor::Rgb {
-                    r: bot.r,
-                    g: bot.g,
-                    b: bot.b
-                }),
-                Print("\u{2580}"),
-            )?;
-        }
-        execute!(out, ResetColor, Print("\r\n"))?;
-    }
-    out.flush()?;
-    Ok(())
 }

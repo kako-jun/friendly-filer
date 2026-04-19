@@ -25,11 +25,18 @@ simulation layer is pure Rust; rendering is outsourced to termray.
 
 ### Module map (`src/`)
 
-- `main.rs` — entry point, terminal guard, current demo frame
+- `main.rs` — entry point, terminal guard, 60 FPS frame loop
 - `lib.rs` — public re-exports of the modules below
 - `palette.rs` — TRON 3-color constants (`BG_BLACK`, `GRID_BLUE`,
   `ENEMY_RED`, `GEOMETRY_GRAY`, `UI_BLUE`, `WARN_RED`)
-- `player.rs` — `Player`, `new`, `is_crashed` (movement & jump in #18)
+- `player.rs` — `Player`, `new`, `is_crashed` (data only; motion lives
+  in `physics.rs`)
+- `input.rs` — `FrameInput`, `poll_frame_input` (crossterm → frame
+  intents; WASD / Space / arrows / Shift / F1 / Esc)
+- `physics.rs` — `step_movement`, `step_gravity`, `try_jump`,
+  `add_yaw`, `add_pitch`, tunable `pub const`s (config override in #17)
+- `render.rs` — `present`, `WallTextureFlat`, `FloorTextureGrid`
+  (TRON-coloured termray adapters + half-block stdout flush)
 - `enemy.rs` — `EnemyKind`, `Enemy`, `Enemy::from_metadata`, `Swarm`
   (AI in #9)
 - `disc.rs` — `DiscState`, `Disc`, `is_ready` (physics in #10)
@@ -38,8 +45,9 @@ simulation layer is pure Rust; rendering is outsourced to termray.
 - `menu.rs` — `Operation`, `MenuContext` (effects & undo in #12)
 - `hud.rs` — `Hud`, `Mode` (full HUD in #13)
 - `config.rs` — `Config` + `Default`, `AimStyle` (TOML in #17)
-- `scene.rs` — `DirScene` placeholder (real directory → scene in the
-  absorbed #3 scope)
+- `scene.rs` — `DirScene` with placeholder `GridMap` + `FlatHeightMap`
+  + `spawn_yaw`; `map()` / `heights()` / `camera()` accessors drive the
+  termray pipeline. Real `read_dir` → scene in the absorbed #3 scope.
 
 All modules ship with unit tests at the skeleton stage (10 tests green).
 
@@ -82,15 +90,20 @@ cargo fmt --all
 cargo test
 ```
 
-`cargo run` currently paints one TRON frame (black + blue grid + red
-enemy box + blue banner) for ~0.8 s and exits cleanly.
+`cargo run` now drops into a playable first-person walk-around: an
+8×8 TRON arena rendered by the real termray raycaster, with WASD
+movement, Shift to sprint, Space to jump (single, gravity), arrow keys
+for yaw / pitch aim, F1 toggling FPS-OFF, and Esc / q quitting. A
+minimal debug HUD prints position, yaw, pitch, vz and HP at the bottom
+of the screen.
 
 ## Current stage
 
-Skeleton of the FPS layer (#8). Module shapes, palette, one demo frame,
-`docs/fps-spec.md`. Movement, enemies, disc, portals, menus, HUD,
-search, input mode, FPS-OFF, config and real filesystem reads all land
-in #9 – #18.
+FPS layer skeleton (#8) + playable walk-around (#18). Module shapes,
+palette, scene-backed termray pipeline, input / physics / render
+modules. Enemies, disc, portals, menus, full HUD, search, input mode,
+FPS-OFF content, config and real filesystem reads all land in #9 –
+#17.
 
 ## Roadmap
 
@@ -106,7 +119,7 @@ in #9 – #18.
 | #15 | Input mode (rename, new file, new folder) |
 | #16 | FPS OFF, preview, shell integration (`--cd-on-exit`) |
 | #17 | Config (palette, keys, LOD thresholds) |
-| #18 | Player movement (WASD / hjkl, jump, gravity, aim) |
+| #18 | Player movement (WASD, jump, gravity, aim) — **done** |
 
 The earlier Phase 1–4 issues (#3 – #6) remain open for reference but
 are superseded by #9 – #18.
