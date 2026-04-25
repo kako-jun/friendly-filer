@@ -57,7 +57,7 @@ feeding it the scene data produced by `DirScene`.
 |---|---|---|
 | `palette.rs` | skeleton (#8) | TRON 3-color constants: `BG_BLACK`, `GRID_BLUE`, `ENEMY_RED`, `GEOMETRY_GRAY`, `UI_BLUE`, `WARN_RED`. Single source of truth for all drawing. |
 | `player.rs` | skeleton (#8) | `Player { pos, yaw, hp, .. }`, `new`, `is_crashed`. Movement / jump land in #18. |
-| `enemy.rs` | skeleton (#8) | `EnemyKind`, `Enemy`, `Enemy::from_metadata` (extension-based classification, `log(size)` HP), `Swarm` for LOD aggregation. AI lands in #9. |
+| `enemy.rs` | #9 Phase 2 | `EnemyKind`, `Enemy`, `Enemy::from_metadata` (extension-based classification, `log(size)` HP), `Swarm` for LOD aggregation. `step_jump` (gravity + kind-based jumping), `compute_next_pos` (directional movement). `DirScene::from_dir` spawns enemies from real directory contents. Phase 1 done. Disc physics + LOD lands in #9 Phase 3+. |
 | `disc.rs` | skeleton (#8) | `DiscState { Idle, Flying, Returning }`, `Disc`, `is_ready`. Physics + multi-hit land in #10. |
 | `portal.rs` | skeleton (#8) | `Portal` (subfolder), `Monolith` (current folder ops), `ParentGate` (`..`), `is_dangerous_path` guard. Sealed-door logic lands in #11. |
 | `menu.rs` | skeleton (#8) | `Operation { Open, Rename, Move, Copy, Delete, Info, Cancel }` and `MenuContext { File, Swarm, Folder, Monolith }`. Real menu + effects land in #12. |
@@ -69,23 +69,31 @@ feeding it the scene data produced by `DirScene`.
 | `render.rs` | done (#18) | Framebuffer → stdout `present()` (half-block), plus `WallTextureFlat` and `FloorTextureGrid` TRON adapters for termray's `WallTexturer` / `FloorTexturer` traits. |
 | `main.rs` | FPS loop (#18) | 60 FPS frame loop: input → physics → camera sync → `cast_all_rays` → `render_floor_ceiling` + `render_walls` → debug HUD → `present`. Esc / q quit; F1 toggles FPS-OFF mode. The #8 static demo frame has been removed. |
 
-## Current state (#18 playable walk-around)
+## Current state (#18 playable walk-around + #9 Phase 2 enemy AI)
 
 What `cargo run` does today:
 
 1. Reads terminal size via `crossterm::terminal::size` and allocates a
    half-block-doubled `termray::Framebuffer`.
-2. Builds an 8×8 `DirScene::placeholder()` — solid outer ring, 6×6
-   walkable interior, one demo enemy, one central monolith.
+2. Builds a `DirScene::from_dir(&cwd)` — reads the current directory,
+   spawns files as wireframe enemies (kind-classified by extension),
+   derives HP from file size on a log scale, and deterministically
+   positions them in the arena. Fallback to 8×8 placeholder if reading
+   fails.
 3. Enters the alternate screen + raw mode via `TerminalGuard`.
 4. Runs a 60 FPS frame loop driving the **real** termray raycaster:
    - `input::poll_frame_input` drains crossterm events into a
      `FrameInput`;
    - `physics::step_movement` / `try_jump` / `step_gravity` /
      `add_yaw` / `add_pitch` update the `Player`;
+   - **Enemy AI**: `compute_next_pos` moves each enemy toward the player,
+     then `step_jump` applies kind-based gravity and automatic jumping
+     (Nimble enemies jump more frequently, Heavy enemies less, Floaty
+     enemies hover and drift);
    - `Camera::set_pose` / `set_z` / `set_pitch` sync the camera;
    - `render_floor_ceiling` + `render_walls` rasterize the frame into
      the framebuffer using `FloorTextureGrid` + `WallTextureFlat`;
+   - Enemy sprites project via `termray::project_sprites` and render;
    - a single `Font8x8` debug line prints pos / yaw / pitch / vz /
      HP / MODE at the bottom of the screen;
    - `render::present` flushes the framebuffer with half-block

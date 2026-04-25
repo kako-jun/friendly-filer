@@ -7,6 +7,13 @@ All notable changes to friendly-filer are documented in this file. The format is
 ## [Unreleased]
 
 ### Added
+- Enemy AI: jumping and gravity ([#9](https://github.com/kako-jun/friendly-filer/issues/9) Phase 2).
+  New `step_jump` method on `Enemy` implements gravity simulation and automatic jumping with
+  kind-based intervals: Nimble (1.5s), Heavy (5.0s), Floaty (2.0s hover), Default (3.0s).
+  New `compute_next_pos` method for directional movement toward the player. `DirScene::from_dir`
+  loads real enemies from the current directory. Enemy z-position now updates each frame in
+  the main loop with gravity + landing state management. 39 unit tests green (new tests:
+  `jump_interval`, `hp_from_size`, `classify_by_extension`, `from_metadata_populates_fields`).
 - Playable first-person walk-around ([#18](https://github.com/kako-jun/friendly-filer/issues/18)).
   New `input.rs` (crossterm → `FrameInput`), `physics.rs` (WASD / Shift / Space / arrow
   motion with axis-aligned Doom-style wall slide, gravity, jump, yaw wrap, pitch clamp),
