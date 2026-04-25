@@ -127,7 +127,8 @@ pub fn step_movement(player: &mut Player, forward: f64, strafe: f64, dt: f64, ma
 /// Test whether a circle of [`PLAYER_RADIUS`] centred at `(x, y)` would
 /// overlap any solid tile in `map`. Samples the four cardinal edges of
 /// the bounding box; that's enough for axis-aligned grid walls and
-/// avoids the cost of a full per-corner sweep.
+/// avoids the cost of a full per-corner sweep. Used by both player and
+/// enemy movement to prevent wall-phasing.
 pub fn blocked_at(map: &dyn TileMap, x: f64, y: f64) -> bool {
     let r = PLAYER_RADIUS;
     for (tx, ty) in [

@@ -76,6 +76,8 @@ impl Drop for TerminalGuard {
 
 const ENEMY_SPRITE_TYPE: u8 = 3;
 
+/// Renders wireframe enemies at their 3D positions.
+/// Sprite type 3 draws a 7-row humanoid pattern (#/.#) in red RGB(220, 30, 30).
 struct EnemyArt {
     enemy: termray::SpriteDef,
 }
@@ -128,7 +130,8 @@ fn main() -> anyhow::Result<()> {
     }
 
     // --- Scene + per-frame state ---
-    let mut scene = DirScene::from_dir(&std::env::current_dir()?)?;
+    let mut scene = DirScene::from_dir(&std::env::current_dir()?)
+        .unwrap_or_else(|_| DirScene::placeholder());
     let mut player = Player::new(scene.player_spawn.0, scene.player_spawn.1, scene.spawn_yaw);
     player.z = GROUND_Z;
 
@@ -196,18 +199,18 @@ fn main() -> anyhow::Result<()> {
 
         // --- Enemy AI ---
         use friendly_filer::physics::blocked_at;
+        let next_positions: Vec<(f64, f64)> = scene.enemies.iter()
+            .map(|e| e.compute_next_pos(player.x, player.y, dt))
+            .collect();
         let is_blocked: Vec<bool> = {
             let map = scene.map();
-            scene.enemies.iter()
-                .map(|e| {
-                    let (nx, ny) = e.compute_next_pos(player.x, player.y, dt);
-                    blocked_at(map, nx, ny)
-                })
+            next_positions.iter()
+                .map(|&(nx, ny)| blocked_at(map, nx, ny))
                 .collect()
         };
-        for (enemy, blocked) in scene.enemies.iter_mut().zip(is_blocked) {
-            if !blocked {
-                let (next_x, next_y) = enemy.compute_next_pos(player.x, player.y, dt);
+        for (i, enemy) in scene.enemies.iter_mut().enumerate() {
+            if !is_blocked[i] {
+                let (next_x, next_y) = next_positions[i];
                 enemy.x = next_x;
                 enemy.y = next_y;
             }

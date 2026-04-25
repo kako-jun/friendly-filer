@@ -52,7 +52,9 @@ impl Enemy {
     pub fn from_metadata(file_name: String, size: u64, x: f64, y: f64) -> Self {
         let kind = classify(&file_name);
         let hp = hp_from_size(size);
-        let jump_timer = jump_interval(kind);
+        // Add deterministic jitter to jump timing (0.8–1.2× base interval) from filename hash
+        let jitter = 0.8 + (file_name.len() % 41) as f64 / 100.0;
+        let jump_timer = jump_interval(kind) * jitter;
         Self {
             file_name,
             size,

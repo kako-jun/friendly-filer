@@ -21,6 +21,11 @@ const PLACEHOLDER_MAP_SIZE: usize = 8;
 /// fish-eye distortion at the edges.
 const DEFAULT_FOV_RAD: f64 = 80.0 * std::f64::consts::PI / 180.0;
 
+/// Maximum number of individual enemies spawned from directory entries before
+/// LOD aggregation kicks in. Larger dirs have their files collected into
+/// swarms for visibility + performance. Tuned in config (#17).
+const LOD_INDIVIDUAL_MAX: usize = 20;
+
 /// The renderable state of a single directory.
 ///
 /// Holds both the simulation-layer data (enemies, portals, monolith) and
@@ -126,7 +131,7 @@ impl DirScene {
         }
 
         let mut enemies = Vec::new();
-        for (i, entry) in entries.iter().take(20).enumerate() {
+        for (i, entry) in entries.iter().take(LOD_INDIVIDUAL_MAX).enumerate() {
             if let Ok(metadata) = entry.metadata() {
                 let file_name = entry.file_name().to_string_lossy().to_string();
                 let file_size = metadata.len();
