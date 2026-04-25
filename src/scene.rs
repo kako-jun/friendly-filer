@@ -111,9 +111,11 @@ impl DirScene {
         )
     }
 
-    /// Load a scene from a real directory. Files become enemies with deterministic
-    /// positions based on a hash of the filename. Directories are ignored for now.
-    /// Up to 20 files are loaded; extras are discarded (LOD comes later).
+    /// Load a scene from a real directory. Files become enemies on a 6×4 grid
+    /// inside the placeholder room, ordered by filename (alphabetical sort
+    /// then row-major indexing). Directories are ignored for now. Up to
+    /// `LOD_INDIVIDUAL_MAX` files become individual enemies; extras are
+    /// discarded (swarm aggregation comes later — see #9).
     pub fn from_dir(path: &std::path::Path) -> std::io::Result<Self> {
         let mut entries: Vec<std::fs::DirEntry> = std::fs::read_dir(path)?
             .filter_map(|e| e.ok())

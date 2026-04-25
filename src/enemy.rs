@@ -47,13 +47,23 @@ impl Enemy {
     /// - `kind` is picked from the extension (see [`EnemyKind`]).
     /// - `hp` is `ceil(log2(size_kb))`, clamped to `[1, 5]`. Empty files and
     ///   files under 1 KB all get 1 HP.
-    /// - `x` / `y` are scene-space coordinates (not screen). `z` (vertical
-    ///   hover offset for [`EnemyKind::Floaty`]) will be added in #18.
+    /// - `x` / `y` are scene-space coordinates (not screen). `z` starts at 0
+    ///   for ground-walkers and is offset to `0.8` for [`EnemyKind::Floaty`]
+    ///   on the first [`Self::step_jump`] cycle (see #18 for the long-form
+    ///   hover-bob curve).
+    /// - `jump_timer` is seeded with `jump_interval(kind) × jitter`, where
+    ///   `jitter ∈ [0.8, 1.2]` is derived from a [`DefaultHasher`] of the
+    ///   filename. Same-length filenames therefore desynchronise too,
+    ///   which a length-only hash would not achieve.
     pub fn from_metadata(file_name: String, size: u64, x: f64, y: f64) -> Self {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
         let kind = classify(&file_name);
         let hp = hp_from_size(size);
-        // Add deterministic jitter to jump timing (0.8–1.2× base interval) from filename hash
-        let jitter = 0.8 + (file_name.len() % 41) as f64 / 100.0;
+        let mut hasher = DefaultHasher::new();
+        file_name.hash(&mut hasher);
+        let jitter = 0.8 + (hasher.finish() % 41) as f64 / 100.0;
         let jump_timer = jump_interval(kind) * jitter;
         Self {
             file_name,
