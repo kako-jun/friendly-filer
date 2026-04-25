@@ -33,6 +33,9 @@ pub struct Enemy {
     pub x: f64,
     pub y: f64,
     pub z: f64,
+    pub vz: f64,
+    pub on_ground: bool,
+    pub jump_timer: f64,
     pub hp: u32,
     pub kind: EnemyKind,
     pub identified: bool,
@@ -49,15 +52,69 @@ impl Enemy {
     pub fn from_metadata(file_name: String, size: u64, x: f64, y: f64) -> Self {
         let kind = classify(&file_name);
         let hp = hp_from_size(size);
+        let jump_timer = jump_interval(kind);
         Self {
             file_name,
             size,
             x,
             y,
             z: 0.0,
+            vz: 0.0,
+            on_ground: true,
+            jump_timer,
             hp,
             kind,
             identified: false,
+        }
+    }
+
+    /// Compute new position toward player without wall collision check.
+    /// The caller is responsible for calling `blocked_at` and updating position.
+    pub fn compute_next_pos(&self, player_x: f64, player_y: f64, dt: f64) -> (f64, f64) {
+        let dx = player_x - self.x;
+        let dy = player_y - self.y;
+        let dist = (dx * dx + dy * dy).sqrt();
+
+        if dist < 0.1 {
+            return (self.x, self.y); // Already at player
+        }
+
+        let speed = match self.kind {
+            EnemyKind::Nimble => 1.5,
+            EnemyKind::Heavy => 0.7,
+            EnemyKind::Floaty => 1.0,
+            EnemyKind::Default => 1.0,
+        };
+
+        let vx = (dx / dist) * speed * dt;
+        let vy = (dy / dist) * speed * dt;
+
+        (self.x + vx, self.y + vy)
+    }
+
+    /// Apply gravity and handle jumping with kind-based frequencies.
+    pub fn step_jump(&mut self, dt: f64) {
+        let gravity = if self.kind == EnemyKind::Floaty { 5.0 } else { 12.0 };
+        let ground_z = if self.kind == EnemyKind::Floaty { 0.8 } else { 0.0 };
+
+        if self.on_ground && self.vz == 0.0 {
+            self.jump_timer -= dt;
+            if self.jump_timer <= 0.0 {
+                self.vz = 4.5;
+                self.on_ground = false;
+                self.jump_timer = jump_interval(self.kind);
+            }
+            return;
+        }
+
+        self.on_ground = false;
+        self.vz -= gravity * dt;
+        self.z += self.vz * dt;
+
+        if self.z <= ground_z {
+            self.z = ground_z;
+            self.vz = 0.0;
+            self.on_ground = true;
         }
     }
 }
@@ -91,6 +148,15 @@ fn hp_from_size(size: u64) -> u32 {
     }
     let raw = kb.log2().ceil() as i64;
     raw.clamp(1, 5) as u32
+}
+
+fn jump_interval(kind: EnemyKind) -> f64 {
+    match kind {
+        EnemyKind::Nimble => 1.5,
+        EnemyKind::Heavy => 5.0,
+        EnemyKind::Floaty => 2.0,
+        EnemyKind::Default => 3.0,
+    }
 }
 
 /// A swarm is an aggregate spawned by the LOD system when a directory has

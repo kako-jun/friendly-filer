@@ -105,6 +105,53 @@ impl DirScene {
             DEFAULT_FOV_RAD,
         )
     }
+
+    /// Load a scene from a real directory. Files become enemies with deterministic
+    /// positions based on a hash of the filename. Directories are ignored for now.
+    /// Up to 20 files are loaded; extras are discarded (LOD comes later).
+    pub fn from_dir(path: &std::path::Path) -> std::io::Result<Self> {
+        let mut entries: Vec<std::fs::DirEntry> = std::fs::read_dir(path)?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().ok().map(|ft| ft.is_file()).unwrap_or(false))
+            .collect();
+
+        entries.sort_by_key(|e| e.file_name());
+
+        let size = PLACEHOLDER_MAP_SIZE;
+        let mut tile_map = GridMap::new(size, size);
+        for y in 1..size - 1 {
+            for x in 1..size - 1 {
+                tile_map.set(x, y, TILE_EMPTY);
+            }
+        }
+
+        let mut enemies = Vec::new();
+        for (i, entry) in entries.iter().take(20).enumerate() {
+            if let Ok(metadata) = entry.metadata() {
+                let file_name = entry.file_name().to_string_lossy().to_string();
+                let file_size = metadata.len();
+
+                // Deterministic position from file index: spread across interior 6x6.
+                let x = 1.5 + (i % 6) as f64 + 0.5;
+                let y = 1.5 + (i / 6) as f64 + 0.5;
+                let x = x.min(6.5);
+                let y = y.min(6.5);
+
+                enemies.push(Enemy::from_metadata(file_name, file_size, x, y));
+            }
+        }
+
+        Ok(Self {
+            tile_map,
+            height_map: FlatHeightMap,
+            player_spawn: (1.5, 1.5),
+            spawn_yaw: 0.0,
+            enemies,
+            portals: Vec::new(),
+            monolith: Monolith { x: 4.0, y: 4.0 },
+            parent_gate: None,
+        })
+    }
 }
 
 #[cfg(test)]

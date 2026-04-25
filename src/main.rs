@@ -74,6 +74,49 @@ impl Drop for TerminalGuard {
     }
 }
 
+const ENEMY_SPRITE_TYPE: u8 = 3;
+
+struct EnemyArt {
+    enemy: termray::SpriteDef,
+}
+
+impl EnemyArt {
+    fn new() -> Self {
+        const ENEMY_PATTERN: &[&str] = &[
+            ".#.",
+            "###",
+            "#.#",
+            "#.#",
+            "###",
+            "#.#",
+            "#.#",
+        ];
+        Self {
+            enemy: termray::SpriteDef {
+                pattern: ENEMY_PATTERN,
+                height_scale: 1.2,
+                float_offset_scale: 0.0,
+            },
+        }
+    }
+}
+
+impl termray::SpriteArt for EnemyArt {
+    fn art(&self, sprite_type: u8) -> Option<&termray::SpriteDef> {
+        match sprite_type {
+            ENEMY_SPRITE_TYPE => Some(&self.enemy),
+            _ => None,
+        }
+    }
+
+    fn color(&self, sprite_type: u8) -> termray::Color {
+        match sprite_type {
+            ENEMY_SPRITE_TYPE => termray::Color::rgb(220, 30, 30),
+            _ => termray::Color::rgb(255, 255, 255),
+        }
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     let (cols, rows) = size()?;
     let fb_w = cols as usize;
@@ -85,7 +128,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     // --- Scene + per-frame state ---
-    let scene = DirScene::placeholder();
+    let mut scene = DirScene::from_dir(&std::env::current_dir()?)?;
     let mut player = Player::new(scene.player_spawn.0, scene.player_spawn.1, scene.spawn_yaw);
     player.z = GROUND_Z;
 
@@ -94,6 +137,7 @@ fn main() -> anyhow::Result<()> {
 
     let wall_tx = WallTextureFlat;
     let floor_tx = FloorTextureGrid;
+    let enemy_art = EnemyArt::new();
 
     let mut fb = Framebuffer::new(fb_w, fb_h);
     let mut fps_off = false;
@@ -150,6 +194,26 @@ fn main() -> anyhow::Result<()> {
         }
         step_gravity(&mut player, dt);
 
+        // --- Enemy AI ---
+        use friendly_filer::physics::blocked_at;
+        let is_blocked: Vec<bool> = {
+            let map = scene.map();
+            scene.enemies.iter()
+                .map(|e| {
+                    let (nx, ny) = e.compute_next_pos(player.x, player.y, dt);
+                    blocked_at(map, nx, ny)
+                })
+                .collect()
+        };
+        for (enemy, blocked) in scene.enemies.iter_mut().zip(is_blocked) {
+            if !blocked {
+                let (next_x, next_y) = enemy.compute_next_pos(player.x, player.y, dt);
+                enemy.x = next_x;
+                enemy.y = next_y;
+            }
+            enemy.step_jump(dt);
+        }
+
         // --- Aim ---
         if input.yaw_delta != 0.0 {
             add_yaw(&mut player, input.yaw_delta * AIM_YAW_RATE * dt);
@@ -182,6 +246,17 @@ fn main() -> anyhow::Result<()> {
             &camera,
             RAY_MAX_DEPTH,
         );
+
+        // --- Enemy sprites ---
+        let sprites: Vec<termray::Sprite> = scene.enemies.iter()
+            .map(|e| termray::Sprite {
+                x: e.x,
+                y: e.y,
+                sprite_type: ENEMY_SPRITE_TYPE,
+            })
+            .collect();
+        let projected = termray::project_sprites(&sprites, &camera, scene.heights(), fb.width(), fb.height());
+        termray::render_sprites(&mut fb, &projected, &rays, &enemy_art, RAY_MAX_DEPTH);
 
         draw_hud(&mut fb, &player, fps_off);
 
